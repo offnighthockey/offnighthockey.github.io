@@ -35,11 +35,42 @@ function league() {
 const todayISO = () => new Date().toLocaleDateString("en-CA");   // YYYY-MM-DD in the visitor's own time zone
 
 /* ---------- rates and values ---------- */
+/* Rates that respect sample size. His season so far is steadied by his own last season (counted like 20 extra games) or,
+   with no full season behind him, by a typical regular at his position (like 10 games), so one big night can't make a
+   depth player look like a star. Recent form (last 14 days) adds up to 30%, and only gets all of it with 6+ games behind it. */
+const LS_SK = ["G", "A", "PPP", "SHP", "SOG", "PM", "PIM", "HIT", "BLK"], LS_G = ["W", "L", "OTL", "GA", "SV", "SA", "SO"];
+const PRIOR_OWN = 20, PRIOR_BASE = 10, RECENT_MAX = 0.3, RECENT_FULL = 6;
+let BASE = null;
+function baseRates() {   // median per game among regulars (10+ games this season) at each position group
+  if (BASE) return BASE;
+  const med = a => { const v = a.filter(Number.isFinite).sort((x, y) => x - y); return v.length ? v[Math.floor(v.length / 2)] : 0; };
+  BASE = { G: {} };
+  ["F", "D"].forEach(gr => { const pool = DATA.skaters.filter(p => group(p) === gr && p.gp >= 10); BASE[gr] = {};
+    LS_SK.forEach(k => { BASE[gr][k] = med(pool.map(p => (p.s[k] || 0) / p.gp)); }); });
+  const gpool = DATA.goalies.filter(g => g.gs >= 5);
+  LS_G.forEach(k => { BASE.G[k] = med(gpool.map(g => (g.s[k] || 0) / g.gs)); });
+  return BASE;
+}
+const ownLast = p => p.ls && p.ls[0] >= 20;
+function prior(p, k) {
+  if (ownLast(p)) return { rate: (p.ls[1 + (isG(p) ? LS_G : LS_SK).indexOf(k)] || 0) / p.ls[0], K: PRIOR_OWN };
+  return { rate: baseRates()[group(p)][k] || 0, K: PRIOR_BASE };
+}
+const recentWeight = n => RECENT_MAX * Math.min(n || 0, RECENT_FULL) / RECENT_FULL;
+function steady(p, k, denomKey) {   // season so far plus the prior, before recent form
+  const n = p[denomKey] || 0, pr = prior(p, k);
+  return ((p.s[k] || 0) + pr.K * pr.rate) / (n + pr.K);
+}
 function blend(p, k, denomKey) {
-  const s = p.s[k] / Math.max(p[denomKey], 1);
-  const rd = denomKey === "gs" ? p.rgs : p.rgp;
-  if (!p.r || rd < 3) return s;
-  return 0.7 * s + 0.3 * (p.r[k] / rd);
+  const est = steady(p, k, denomKey), rd = denomKey === "gs" ? p.rgs : p.rgp, w = recentWeight(rd);
+  return p.r && rd ? (1 - w) * est + w * ((p.r[k] || 0) / rd) : est;
+}
+const BIG_NIGHT = 2.5;   // in recent form, one night counts at most 2.5x his usual, so a single 4-goal game can't carry the number
+function bigNights(p, f) {
+  if (isG(p) || !p.g5 || !p.rgp) return { excess: 0, games: [] };
+  const usual = Object.entries(f.sk).reduce((a, [k, w]) => a + w * steady(p, k, "gp"), 0), cap = Math.max(BIG_NIGHT * usual, 3);
+  const games = p.g5.map(g => G5_KEYS.reduce((a, k, i) => a + (f.sk[k] || 0) * g[i], 0)).filter(x => x > cap);
+  return { cap, games, excess: games.reduce((a, x) => a + x - cap, 0) };
 }
 const isG = p => p.p === "G";
 function gamesLeft(p) {
@@ -49,7 +80,8 @@ function gamesLeft(p) {
 }
 function perGamePoints(p, f) {
   if (isG(p)) return Object.entries(f.g).reduce((s, [k, w]) => s + w * blend(p, k, "gs"), 0);
-  return Object.entries(f.sk).reduce((s, [k, w]) => s + w * blend(p, k, "gp"), 0);
+  const raw = Object.entries(f.sk).reduce((s, [k, w]) => s + w * blend(p, k, "gp"), 0);
+  return raw - recentWeight(p.rgp) * bigNights(p, f).excess / Math.max(p.rgp || 1, 1);
 }
 function goalieRates(p) {
   const sv = p.s.SA ? p.s.SV / p.s.SA : 0, gaa = p.s.GA / Math.max(p.gs, 1);
@@ -93,14 +125,56 @@ function gamesPill(team, week) {
 }
 
 /* ---------- leaders (home + fantasy hub) ---------- */
+/* ---------- the evidence behind a number: games played, last 5 games, where the points come from ---------- */
+const G5_KEYS = ["G", "A", "PPP", "SHP", "SOG", "HIT", "BLK", "PM"];
+const STAT_NAME = { G: "goals", A: "assists", PPP: "power-play points", SHP: "shorthanded points", SOG: "shots", HIT: "hits", BLK: "blocks", PM: "plus/minus", PIM: "penalty minutes" };
+const scale = f => f.type === "points" ? f : FORMATS.espn;   // category leagues read the bars on the ESPN points scale
+const ratePts = (f, stat) => Object.entries(scale(f).sk).reduce((a, [k, w]) => a + w * (stat(k) || 0), 0);
+const gamePts = (g, f) => G5_KEYS.reduce((a, k, i) => a + (scale(f).sk[k] || 0) * g[i], 0);
+function sparks(p, f) {
+  if (isG(p) || !p.g5 || !p.g5.length) return `<span class="muted small">none</span>`;
+  const pts = p.g5.slice().reverse().map(g => gamePts(g, f)), avg = perGamePoints(p, scale(f)), top = Math.max(3, ...pts);
+  const label = pts.map(x => fmt(x, 1)).join(", ");
+  return `<span class="spark" role="img" aria-label="Last ${pts.length} games, oldest first: ${label}" title="Last ${pts.length} games, oldest first: ${label}">${
+    pts.map(x => `<i class="${x >= avg ? "hi" : ""}" style="height:${Math.round(10 + 90 * Math.max(0, x) / top)}%"></i>`).join("")}</span>`;
+}
+const played = p => `${p.gp}<span class="meta">${p.rgp || 0} in 14d</span>`;
+const whyBtn = `<button class="why" type="button" aria-expanded="false">Why</button>`;
+function why(p, f) {
+  const sc = scale(f), v = perGamePoints(p, sc), rate = (src, n) => ratePts(f, k => src[k]) / n;
+  const parts = Object.keys(sc.sk).map(k => [k, sc.sk[k] * blend(p, k, "gp")]).filter(([, x]) => x >= 0.01).sort((a, b) => b[1] - a[1]);
+  const tot = parts.reduce((a, [, x]) => a + x, 0) || 1, share = ks => parts.filter(([k]) => ks.includes(k)).reduce((a, [, x]) => a + x, 0) / tot;
+  const last = ownLast(p) ? rate(Object.fromEntries(LS_SK.map((k, i) => [k, p.ls[1 + i]])), p.ls[0]) : null;
+  const w = p.r && p.rgp ? recentWeight(p.rgp) : 0, g5 = (p.g5 || []).slice().reverse().map(g => gamePts(g, f));
+  const atAvg = g5.filter(x => x >= v).length, grind = share(["HIT", "BLK", "SOG"]), scoring = share(["G", "A", "PPP", "SHP"]);
+  return `<div class="whybox"><p><strong>${fmt(v, 2)} ${sc === f ? "points" : "points on the ESPN scale"} a game.</strong> Where it comes from: ${
+      parts.map(([k, x]) => `${STAT_NAME[k]} ${fmt(x, 2)}`).join(", ")}.</p>
+    <p>Built from <strong>${p.gp} games this season</strong> (${fmt(rate(p.s, Math.max(p.gp, 1)), 2)} a game)${last !== null
+      ? `, steadied by <strong>${p.ls[0]} games last season</strong> (${fmt(last, 2)} a game, counted like ${PRIOR_OWN} games)`
+      : `, steadied toward a typical regular at his position (no full season behind him, counted like ${PRIOR_BASE} games)`}${w
+      ? `, plus the <strong>last 14 days: ${p.rgp} games</strong> (${fmt(rate(p.r, p.rgp), 2)} a game) at ${Math.round(w * 100)}% weight${p.rgp < RECENT_FULL ? ` (full 30% needs ${RECENT_FULL} games)` : ""}` : ""}.</p>
+    ${g5.length ? `<p><strong>Last ${g5.length} games</strong>, oldest first: ${g5.map(x => fmt(x, 1)).join(", ")}. ${atAvg} of ${g5.length} at or above his ${fmt(v, 2)}.${(() => {
+      const bn = bigNights(p, sc); return bn.games.length ? ` His ${bn.games.map(x => fmt(x, 1)).join(" and ")} night${bn.games.length > 1 ? "s count" : " counts"} as ${fmt(bn.cap, 1)} in recent form (one night is capped at ${BIG_NIGHT}x his usual), so a single big game can't carry the number.` : ""; })()}</p>` : ""}
+    <p class="note">${grind >= 0.4 ? `${Math.round(grind * 100)}% of his value is shots, hits and blocks, which show up most nights, so his floor is steadier than a pure scorer's.`
+      : scoring >= 0.75 ? `${Math.round(scoring * 100)}% of his value rides on goals and assists, so expect bigger swings night to night.` : "A mix of scoring and steady stats."}</p></div>`;
+}
+const whyRow = (p, f, cols) => `<tr class="detail" hidden><td colspan="${cols}">${why(p, f)}</td></tr>`;
+const METHOD = `Per game: this season, steadied by his last season (or a typical regular at his position), plus up to 30% from the last 14 days. Bars are his last 5 games, lit when at or above his average. Tap Why for the numbers behind any player.`;
+document.addEventListener("click", e => {
+  const b = e.target.closest && e.target.closest(".why");
+  if (!b) return;
+  const row = b.closest("tr").nextElementSibling, open = b.getAttribute("aria-expanded") === "true";
+  if (row && row.classList.contains("detail")) { row.hidden = open; b.setAttribute("aria-expanded", String(!open)); b.textContent = open ? "Why" : "Hide"; }
+});
+
 function leadersTable(fkey, limit = 12, waiverOnly = true) {
   const f = FORMATS[fkey];
   const all = DATA.skaters.filter(p => p.gp >= 5).map(p => ({ p, v: perGame(p, f, fkey) })).sort((a, b) => b.v - a.v);
   const list = (waiverOnly ? all.slice(150) : all).filter(x => x.p.rgp >= 3).slice(0, limit);
-  const unit = f.type === "points" ? "Pts/GP" : "Cat value/GP";
-  return `<div class="scroll"><table><thead><tr><th>#</th><th>Player</th><th>Team</th><th class="num">GP</th><th class="num">${unit}</th></tr></thead><tbody>${
-    list.map((x, i) => `<tr><td class="muted">${i + 1}</td><td>${esc(x.p.n)} <span class="muted small">${x.p.p}</span></td><td>${esc(x.p.t)}${gamesPill(x.p.t, window.WEEK)}</td><td class="num">${x.p.gp}</td><td class="num led">${fmt(x.v, 2)}</td></tr>`).join("")
-  }</tbody></table></div>`;
+  const unit = f.type === "points" ? "Per game" : "Value per game";
+  return `<div class="scroll"><table class="ev"><thead><tr><th>#</th><th>Player</th><th class="num">Games</th><th>Last 5</th><th class="num">${unit}</th></tr></thead><tbody>${
+    list.map((x, i) => `<tr><td class="muted">${i + 1}</td><td>${who(x.p)} ${whyBtn}</td><td class="num">${played(x.p)}</td><td>${sparks(x.p, f)}</td><td class="num led">${fmt(x.v, 2)}</td></tr>${whyRow(x.p, f, 5)}`).join("")
+  }</tbody></table></div><p class="note">${METHOD}</p>`;
 }
 function tabs(el, onPick) {
   const L = league(), keys = Object.keys(FORMATS), start = L.k;
@@ -412,9 +486,9 @@ async function home() {
     }
     const st = nightStreamers(Z, sel, k, 8);
     const pts = f.type === "points";
-    $("#np-list").innerHTML = `<div class="scroll"><table><thead><tr><th>Player</th><th class="num">Games</th>${pts ? '<th class="num">Last 14 days</th>' : ""}<th class="num">Per game</th></tr></thead><tbody>${
-      st.map(x => { const g = weekGamesOf(x.p.t), r = recentRate(x.p, f); return `<tr><td>${who(x.p)}</td><td class="num">${g}${g >= 4 ? ' <span class="pill">4G</span>' : ""}</td>${pts ? `<td class="num">${r === null ? "" : fmt(r, 2)}</td>` : ""}<td class="num led">${fmt(x.v, 2)}</td></tr>`; }).join("")}</tbody></table></div>
-      <p class="note">${LEAGUE ? `Free agents in ${esc(LEAGUE.name)}, ${esc(f.name)} scoring.` : `Likely on waivers in ${esc(f.name)} (outside the top 150 in this scoring).`} Last 14 days blended with the season.</p>`;
+    $("#np-list").innerHTML = `<div class="scroll"><table class="ev"><thead><tr><th>Player</th><th class="num">Games</th><th>Last 5</th><th class="num">This week</th><th class="num">Per game</th></tr></thead><tbody>${
+      st.map(x => { const g = weekGamesOf(x.p.t); return `<tr><td>${who(x.p)} ${whyBtn}</td><td class="num">${played(x.p)}</td><td>${sparks(x.p, f)}</td><td class="num">${g}${g >= 4 ? ' <span class="pill">4G</span>' : ""}</td><td class="num led">${fmt(x.v, 2)}</td></tr>${whyRow(x.p, f, 5)}`; }).join("")}</tbody></table></div>
+      <p class="note">${LEAGUE ? `Free agents in ${esc(LEAGUE.name)}, ${esc(f.name)} scoring.` : `Likely on waivers in ${esc(f.name)} (outside the top 150 in this scoring).`} ${METHOD}</p>`;
   };
   const drawSnap = () => {
     const mine = myRoster();
@@ -565,8 +639,9 @@ async function teamPage() {
     const adds = bestAdds(Z, W, mine, f, k);
     const limit = LEAGUE ? (LEAGUE.acq > 0 ? ` Your league allows ${LEAGUE.acq} add${LEAGUE.acq > 1 ? "s" : ""} per matchup${LEAGUE.wday ? `, and waivers run ${LEAGUE.wday.charAt(0) + LEAGUE.wday.slice(1).toLowerCase()}` : ""}, so pick the one that covers the most open nights.` : "") : "";
     $("#adds").innerHTML = `<div class="panel-head"><h2>Best adds for your open spots</h2></div><p class="note">${LEAGUE ? `Free agents in ${esc(LEAGUE.name)}.` : `Likely on waivers in ${esc(f.name)}.`} Usable games = his team's games on nights you have an open spot he fits.${limit}</p>
-      <div class="scroll"><table><thead><tr><th>Player</th><th class="num">Usable games</th><th class="num">Per game</th><th class="num">Adds you</th></tr></thead><tbody>${
-      adds.map(x => `<tr><td>${who(x.p)}</td><td class="num">${x.add}</td><td class="num">${fmt(x.v, 2)}</td><td class="num led">${fmt(x.total, 1)}</td></tr>`).join("") || `<tr><td colspan="4" class="muted">No open spots to fill this week.</td></tr>`}</tbody></table></div>`;
+      <div class="scroll"><table class="ev"><thead><tr><th>Player</th><th class="num">Games</th><th>Last 5</th><th class="num">Usable games</th><th class="num">Per game</th><th class="num">Adds you</th></tr></thead><tbody>${
+      adds.map(x => `<tr><td>${who(x.p)} ${whyBtn}</td><td class="num">${played(x.p)}</td><td>${sparks(x.p, f)}</td><td class="num">${x.add}</td><td class="num">${fmt(x.v, 2)}</td><td class="num led">${fmt(x.total, 1)}</td></tr>${whyRow(x.p, f, 6)}`).join("") || `<tr><td colspan="6" class="muted">No open spots to fill this week.</td></tr>`}</tbody></table></div>
+      <p class="note">Adds you = usable games times per game. ${METHOD}</p>`;
     $("#mine").innerHTML = `<div class="scroll"><table><thead><tr><th>Player</th><th class="num">Games</th><th class="num">Usable</th><th class="num">Benched</th><th class="num">Light nights</th><th class="num">Per game</th></tr></thead><tbody>${
       W.rows.map(r => { const g = r.games * startShare(r.p), bench = g - r.used, d = isG(r.p) ? 1 : 0;
         return `<tr><td>${who(r.p)}</td><td class="num">${fmt(g, d)}</td><td class="num led">${fmt(r.used, d)}</td><td class="num${bench >= 0.5 ? " warn" : ""}">${bench >= 0.5 ? fmt(bench, d) : ""}</td><td class="num">${r.light}</td><td class="num">${fmt(r.v, 2)}</td></tr>`; }).join("")}</tbody></table></div>

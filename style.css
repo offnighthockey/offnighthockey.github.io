@@ -236,3 +236,16 @@ html.wiping::after { content: ""; position: fixed; inset: 0; z-index: 99; backgr
   background: linear-gradient(90deg, transparent, rgba(220, 240, 255, .55)); box-shadow: 0 -8px 0 -1px rgba(220, 240, 255, .18), 0 7px 0 -1px rgba(220, 240, 255, .12); }
 @media (max-width: 560px) { .rinkwipe .rider { left: -160px; width: 160px; height: 118px; } .rinkwipe svg { width: 160px; height: 118px; } .rinkwipe .spray { right: 32px; top: 90px; width: 200px; height: 4px; } }
 .pill.out { border-color: var(--red); color: var(--red); }
+
+/* evidence: last-5 bars and the Why panel */
+.spark { display: inline-flex; align-items: flex-end; gap: 3px; height: 26px; vertical-align: middle; }
+.spark i { display: block; width: 7px; border-radius: 2px 2px 0 0; background: rgba(138, 157, 178, .45); }
+.spark i.hi { background: var(--amber); box-shadow: 0 0 6px rgba(255, 197, 61, .45); }
+td .meta { white-space: nowrap; }
+table.ev td.num .meta { display: block; margin-left: 0; font-size: 12px; }
+.why { font: 600 13px/1 var(--head); color: var(--ice-blue); background: none; border: 1px solid var(--edge); border-radius: 999px; padding: 3px 8px; margin-left: 6px; cursor: pointer; vertical-align: middle; }
+.why[aria-expanded="true"] { background: rgba(79, 216, 255, .12); }
+tr.detail td { background: rgba(4, 8, 15, .45); border-bottom: 1px solid var(--edge); }
+.whybox p { margin: 0 0 8px; font-size: 14.5px; line-height: 1.5; color: var(--ice-dim); max-width: 78ch; }
+.whybox p strong { color: var(--ice); }
+@media (max-width: 560px) { .why { display: inline-block; margin: 4px 0 0; } .spark { height: 20px; gap: 2px; } .spark i { width: 5px; } }
