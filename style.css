@@ -79,3 +79,4 @@ footer.site { margin: 50px 0 30px; color: var(--steel); font-size: 14px; border-
 .sched td.opp { text-align: center; font-size: 14px; white-space: nowrap; color: #c8d8e8; }
 tr.mine td:first-child { box-shadow: inset 3px 0 0 var(--amber); }
 @media (max-width: 640px) { .nights { grid-template-columns: repeat(4, minmax(0, 1fr)); } .night b { font-size: 22px; } }
+.num.warn { color: var(--red); }

@@ -7,19 +7,18 @@
 <script type="application/ld+json">{"@context": "https://schema.org", "@type": "Organization", "name": "Off-Night Hockey", "url": "https://offnighthockey.github.io/", "logo": "https://offnighthockey.github.io/logo.png", "sameAs": ["https://www.youtube.com/@OffNightHockey", "https://x.com/OffNightHKY", "https://www.instagram.com/offnighthky/", "https://www.tiktok.com/@offnighthockey00"]}</script>
 <meta name="google-site-verification" content="2fv9aJlHGEzhI1LBypkRz-0BJGY0QKjJws0ZWl0tpJ4">
 <link rel="icon" href="icon.png"><link rel="manifest" href="manifest.webmanifest"><meta name="theme-color" content="#0b1a2e">
-<link rel="apple-touch-icon" href="app-192.png"><meta name="apple-mobile-web-app-capable" content="yes"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&display=swap"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Doto:wght@800&display=swap"><link rel="stylesheet" href="style.css?v=7adf76ff">
-<script src="app.js?v=027f81ad" defer></script></head>
+<link rel="apple-touch-icon" href="app-192.png"><meta name="apple-mobile-web-app-capable" content="yes"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&display=swap"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Doto:wght@800&display=swap"><link rel="stylesheet" href="style.css?v=c69aa8f1">
+<script src="app.js?v=a1e5a115" defer></script></head>
 <body data-page="home"><div class="wrap">
 <header class="site"><a href="index.html" aria-label="Off-Night Hockey home"><img src="logo.png" alt="Off-Night Hockey"></a><nav aria-label="Main"><a href="index.html" aria-current=page>Home</a><a href="schedule.html">Schedule</a><a href="waiver-wire.html">Waiver wire</a><a href="fantasy.html">Formats</a><a href="trade.html">Trade calculator</a><a href="nhl-trade.html">NHL trades</a></nav></header>
 <main>
 <section class="hero"><p class="kicker">Fantasy hockey edges, every week</p>
 <h1>Win the nights <span style="color:var(--ice-blue)">nobody plays</span></h1>
 <p class="lede">The 4-game teams, the light nights when your bench has open spots, waiver leaders for your league's format, and trade calculators that use your scoring.</p></section>
-<div class="grid2">
 <section class="panel"><p class="kicker" id="tonight-date"></p><h2 id="tonight-title">Tonight</h2><div id="tonight"></div></section>
-<section class="panel"><h2>My team</h2><p class="muted small">Add your players once. You'll see their games this week, their light-night starts and who plays tonight. Saved in this browser only.</p>
-<label for="add-mine">Add a player</label><input id="add-mine" placeholder="Start typing a name" autocomplete="off"><div id="mine"></div></section>
-</div>
+<section class="panel"><h2>My team</h2><p class="muted small">Add your players once and pick your lineup spots. You'll see how many of their games you can actually use (a game only counts when the player makes your best lineup that night), the nights with open spots, and the best adds to fill them. Saved in this browser only.</p>
+<div class="controls"><div><label for="slots">Lineup spots</label><select id="slots"></select></div><div><label for="myweek">Week</label><select id="myweek"><option value="rest">Rest of this week</option><option value="next">Next week</option></select></div>
+<div><label for="add-mine">Add a player</label><input id="add-mine" placeholder="Start typing a name" autocomplete="off"></div></div><div id="mine"></div><div id="open"></div><div id="adds"></div></section>
 <section class="panel"><p class="kicker" id="week-span"></p><h2 id="week-title">This week</h2>
 <p class="muted small">Glowing columns are light nights: 7 games or fewer, so fewer of your players are playing and a pickup fills a real hole.</p>
 <div id="schedule"></div><p class="small"><a href="schedule.html">Every team, any week, back-to-backs and your fantasy playoffs</a> &middot; <a href="nhl-4-game-teams-this-week.html">4-game teams page</a></p></section>

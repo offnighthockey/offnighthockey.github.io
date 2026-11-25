@@ -146,24 +146,84 @@ function tonightPanel(T) {
     + `<h3>Streamers playing tonight</h3><p class="small muted">${esc(f.name)}, likely on waivers, recent form blended with season.</p><div class="scroll"><table><thead><tr><th>Player</th><th>Team</th><th class="num">Per game</th></tr></thead><tbody>${
       streams.map(x => `<tr><td>${esc(x.p.n)} <span class="muted small">${x.p.p}</span></td><td>${esc(x.p.t)}</td><td class="num led">${fmt(x.v, 2)}</td></tr>`).join("")}</tbody></table></div>`;
 }
-function myTeamPanel(week, T) {
-  const ids = store.get("team", []), L = league(), f = FORMATS[L.k], tonight = T.date === todayISO() ? T.teams : [];
-  const byId = new Map(everyone().map(p => [p.id, p]));
-  const mine = ids.map(id => byId.get(id)).filter(Boolean);
-  $("#mine").innerHTML = !mine.length ? `<p class="muted">No players yet. Add your roster and this panel shows your week.</p>`
-    : `<div class="scroll"><table><thead><tr><th>Player</th><th class="num">Games, week of ${new Date(week.week[0] + "T12:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })}</th><th class="num">Light nights</th><th class="num">Per game</th><th><span class="muted small">Remove</span></th></tr></thead><tbody>${
-      mine.map(p => { const g = weekGames(p.t, week), on = tonight.includes(p.t);
-        return `<tr><td>${esc(p.n)} <span class="muted small">${esc(p.t)} ${p.p}</span>${on ? ' <span class="pill">TONIGHT</span>' : ""}</td><td class="num">${g.length}</td><td class="num">${g.filter(x => x.light).length}</td><td class="num led">${fmt(perGame(p, f, L.k), 2)}</td><td><button class="x" data-rm-mine="${p.id}" aria-label="Remove ${esc(p.n)}">×</button></td></tr>`; }).join("")}</tbody></table></div>`;
+/* ---------- usable games: a game counts only if the player makes your best legal lineup that night ---------- */
+const SLOTS = {
+  espn: { name: "ESPN default (2C 2LW 2RW 4D 1UTIL 2G)", s: { C: 2, LW: 2, RW: 2, D: 4, UTIL: 1, G: 2 } },
+  yahoo: { name: "Yahoo default (2C 2LW 2RW 4D 2G)", s: { C: 2, LW: 2, RW: 2, D: 4, G: 2 } },
+  fdg: { name: "Forwards / D / G (6F 4D 2G)", s: { F: 6, D: 4, G: 2 } },
+};
+const POS = { C: "C", L: "LW", R: "RW", D: "D", G: "G" };
+const fits = (p, slot) => slot === POS[p.p] || (slot === "F" && "CLR".includes(p.p)) || (slot === "UTIL" && p.p !== "G");
+const startShare = p => isG(p) ? Math.min(1, p.gs / Math.max(DATA.teams[p.t].played, 1)) : 1;   // a goalie only counts when he starts
+function nightLineup(playing, slots) {
+  // Positions come from the NHL (one each), so filling each position's own slots by value, then UTIL with the best leftover, is the best lineup.
+  const left = { ...slots }, used = new Map(), order = [...playing].sort((a, b) => b.v - a.v);
+  for (const pass of [s => s !== "UTIL", s => s === "UTIL"])
+    for (const x of order) {
+      if (used.has(x.p.id)) continue;
+      const slot = Object.keys(left).find(s => pass(s) && left[s] > 0 && fits(x.p, s));
+      if (slot) { left[slot]--; used.set(x.p.id, slot); }
+    }
+  return { used, left };
+}
+function usableWeek(Z, mine, from, to, slots, f, key) {
+  const rows = mine.map(p => ({ p, v: perGame(p, f, key), games: 0, used: 0, light: 0 }));
+  const nights = [];
+  for (let d = from; d <= to; d = addDays(d, 1)) {
+    const n = Z.perDay.get(d) || 0;
+    const playing = rows.filter(r => Z.plays.has(r.p.t + d));
+    playing.forEach(r => { r.games++; if (n && n <= LIGHT) r.light++; });
+    const { used, left } = nightLineup(playing, slots);
+    used.forEach((_, id) => { const r = rows.find(x => x.p.id === id); r.used += startShare(r.p); });
+    nights.push({ d, n, left });
+  }
+  return { rows, nights };
+}
+function bestAdds(Z, wk, mine, f, key) {
+  const cut = waiverCut(key), have = new Set(mine.map(p => p.id));
+  return DATA.skaters.filter(p => !have.has(p.id) && p.gp >= 5 && p.rgp >= 3).map(p => ({ p, v: perGame(p, f, key) })).filter(x => x.v < cut)
+    .map(x => ({ ...x, add: wk.nights.filter(nt => nt.n && Z.plays.has(x.p.t + nt.d) && Object.keys(nt.left).some(s => nt.left[s] > 0 && fits(x.p, s))).length }))
+    .filter(x => x.add).map(x => ({ ...x, total: x.add * x.v })).sort((a, b) => b.total - a.total).slice(0, 8);
+}
+function myTeamPanel(Z, T) {
+  const ids = store.get("team", []), L = league(), f = FORMATS[L.k], span0 = store.get("myweek", "rest");
+  const tonight = T.date === todayISO() && span0 !== "next" ? T.teams : [];   // the TONIGHT tag only makes sense in this week's view
+  const byId = new Map(everyone().map(p => [p.id, p])), mine = ids.map(id => byId.get(id)).filter(Boolean);
+  const slotKey = SLOTS[store.get("slots", "espn")] ? store.get("slots", "espn") : "espn", span = store.get("myweek", "rest");
+  const today = todayISO(), mon = mondayOf(today);
+  const from = span === "next" ? addDays(mon, 7) : today, to = span === "next" ? addDays(mon, 13) : addDays(mon, 6);
+  $("#open").innerHTML = $("#adds").innerHTML = "";
+  if (!mine.length) { $("#mine").innerHTML = `<p class="muted">No players yet. Add your roster and this panel shows how many of their games you can use, your open spots and the best adds.</p>`; return; }
+  const wk = usableWeek(Z, mine, from, to, SLOTS[slotKey].s, f, L.k);
+  const tot = wk.rows.reduce((a, r) => ({ g: a.g + r.games * startShare(r.p), u: a.u + r.used }), { g: 0, u: 0 });
+  const label = `${dayDate(from)} to ${dayDate(to)}`;
+  $("#mine").innerHTML = `<p><strong>You can use ${fmt(tot.u, 0)} of your players' ${fmt(tot.g, 0)} games</strong> (${label}). ${tot.g - tot.u >= 0.5 ? `${fmt(tot.g - tot.u, 0)} sit on your bench on crowded nights.` : "Nobody gets stuck on your bench."}</p>
+    <div class="scroll"><table><thead><tr><th>Player</th><th class="num">Games</th><th class="num">Usable</th><th class="num">Benched</th><th class="num">Light nights</th><th class="num">Per game</th><th><span class="muted small">Remove</span></th></tr></thead><tbody>${
+      wk.rows.map(r => { const on = tonight.includes(r.p.t), g = r.games * startShare(r.p), bench = g - r.used;
+        return `<tr><td>${esc(r.p.n)} <span class="muted small">${esc(r.p.t)} ${POS[r.p.p]}</span>${on ? ' <span class="pill">TONIGHT</span>' : ""}</td><td class="num">${isG(r.p) ? fmt(g, 1) : r.games}</td><td class="num led">${isG(r.p) ? fmt(r.used, 1) : fmt(r.used, 0)}</td><td class="num${bench >= 0.5 ? " warn" : ""}">${bench >= 0.5 ? fmt(bench, isG(r.p) ? 1 : 0) : ""}</td><td class="num">${r.light}</td><td class="num">${fmt(r.v, 2)}</td><td><button class="x" data-rm-mine="${r.p.id}" aria-label="Remove ${esc(r.p.n)}">×</button></td></tr>`; }).join("")}</tbody></table></div>
+    <p class="small muted">Goalies count expected starts (his share of his team's starts). Positions come from the NHL; if your platform lists a player at two positions, the Forwards / D / G lineup is the closer fit.</p>`;
+  $("#open").innerHTML = `<h3>Open skater spots by night</h3><div class="nights">${wk.nights.map(nt => {
+    const open = Object.entries(nt.left).filter(([s]) => s !== "G").reduce((a, [, k]) => a + k, 0), k = !nt.n ? "none" : open >= 3 ? "light" : open === 0 ? "packed" : "";
+    return `<div class="night ${k}"><span class="small">${dayName(nt.d)} ${dayDate(nt.d)}</span><b class="led">${nt.n ? open : "-"}</b><span class="small">${nt.n ? (open ? "open" : "full") : "no games"}</span></div>`; }).join("")}</div>`;
+  const adds = bestAdds(Z, wk, mine, f, L.k);
+  $("#adds").innerHTML = !adds.length ? "" : `<h3>Best adds for your open spots</h3><p class="small muted">Likely on waivers in ${esc(f.name)}. Usable games = his team's games on nights you have an open spot he fits.</p><div class="scroll"><table><thead><tr><th>Player</th><th class="num">Usable games</th><th class="num">Per game</th><th class="num">Adds you</th></tr></thead><tbody>${
+    adds.map(x => `<tr><td>${esc(x.p.n)} <span class="muted small">${esc(x.p.t)} ${POS[x.p.p]}</span></td><td class="num">${x.add}</td><td class="num">${fmt(x.v, 2)}</td><td class="num led">${fmt(x.total, 1)}</td></tr>`).join("")}</tbody></table></div>`;
 }
 
 /* ---------- pages ---------- */
 async function home() {
-  const [players, week, standings, T] = await Promise.all([load("players"), load("week"), load("standings"), load("today").catch(() => ({}))]);
+  const [players, week, standings, T, S] = await Promise.all([load("players"), load("week"), load("standings"), load("today").catch(() => ({})), load("schedule")]);
   DATA = players; window.WEEK = week;
+  const Z = seasonIndex(S);
+  $("#slots").innerHTML = Object.entries(SLOTS).map(([k, x]) => `<option value="${k}">${x.name}</option>`).join("");
+  $("#slots").value = SLOTS[store.get("slots", "espn")] ? store.get("slots", "espn") : "espn";
+  $("#myweek").value = store.get("myweek", "rest") === "next" ? "next" : "rest";
+  $("#slots").addEventListener("change", () => { store.set("slots", $("#slots").value); refresh(); });
+  $("#myweek").addEventListener("change", () => { store.set("myweek", $("#myweek").value); refresh(); });
   $("#week-title").textContent = `${week.four.length} teams play 4 games`;
   $("#week-span").textContent = `${week.week[0]} to ${week.week[1]}`;
   $("#schedule").innerHTML = scheduleTable(week);
-  const refresh = () => { tonightPanel(T); myTeamPanel(week, T); };
+  const refresh = () => { tonightPanel(T); myTeamPanel(Z, T); };
   playerPicker($("#add-mine"), p => { const t = store.get("team", []); if (!t.includes(p.id)) { store.set("team", t.concat(p.id)); refresh(); } });
   document.addEventListener("click", e => { const x = e.target.closest("[data-rm-mine]"); if (!x) return;
     store.set("team", store.get("team", []).filter(id => String(id) !== x.dataset.rmMine)); refresh(); });
@@ -297,10 +357,11 @@ function seasonIndex(S) {
     (byTeam[a] = byTeam[a] || []).push({ d, opp: h, home: false });
     (byTeam[h] = byTeam[h] || []).push({ d, opp: a, home: true });
   }
+  const plays = new Set(S.games.flatMap(([d, a, h]) => [a + d, h + d]));
   for (const t in byTeam) byTeam[t].sort((x, y) => (x.d < y.d ? -1 : 1)).forEach((g, i, a) => { g.b2b = i > 0 && addDays(a[i - 1].d, 1) === g.d; });
   const weeks = [];
   for (let m = mondayOf(S.games[0][0]); m <= S.games[S.games.length - 1][0]; m = addDays(m, 7)) weeks.push(m);
-  return { perDay, byTeam, weeks, teams: Object.keys(byTeam).sort() };
+  return { perDay, byTeam, plays, weeks, teams: Object.keys(byTeam).sort() };
 }
 function teamRange(Z, t, from, to) {
   const g = Z.byTeam[t].filter(x => x.d >= from && x.d <= to);
