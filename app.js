@@ -869,64 +869,15 @@ async function schedulePlanner() {
   $("#updated").textContent = players.updated;
 }
 
-/* ---------- page transition: a stick pushes a puck across, pulling a sheet of fresh ice over the old page, then off the new one ---------- */
+/* ---------- page transition: CSS view transitions do the swipe (style.css, "one pass"); here we only note where we came from,
+   so a tab to the left mirrors it (the head script reads this on the next page). ---------- */
 const NAV_ORDER = ["index.html", "team.html", "schedule.html", "waiver-wire.html", "trade.html"];
 const NAV_HOME = { "nhl-trade.html": "trade.html", "fantasy.html": "waiver-wire.html", "nhl-4-game-teams-this-week.html": "schedule.html" };
 const pageSlot = path => { const f = path.split("/").pop() || "index.html"; return NAV_ORDER.indexOf(NAV_HOME[f] || f); };
-const calm = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
-const RIDER = `<svg viewBox="0 0 150 110" aria-hidden="true">
-  <line x1="-70" y1="-90" x2="86" y2="90" stroke="#9fb3c6" stroke-width="8" stroke-linecap="round"/>
-  <line x1="-70" y1="-90" x2="-40" y2="-55" stroke="#1c2b3d" stroke-width="9" stroke-linecap="round"/>
-  <path d="M80 86 L116 86 Q121 86 121 81 L121 79 Q110 82 84 80 Z" fill="#eaf4fb"/>
-  <path d="M92 81 L92 86 M100 81 L100 86 M108 81 L108 86" stroke="#4fd8ff" stroke-width="2"/>
-  <ellipse cx="136" cy="86" rx="15" ry="6.5" fill="#05080d" stroke="rgba(234,244,251,.55)" stroke-width="1.2"/>
-  <ellipse cx="136" cy="83.5" rx="15" ry="5.5" fill="#121a24"/></svg>`;
-function rinkWipe(dir) {
-  const w = document.createElement("div");
-  w.className = "rinkwipe" + (dir < 0 ? " rev" : "");
-  w.setAttribute("aria-hidden", "true");
-  w.innerHTML = `<div class="sheet"></div><div class="rider"><span class="spray"></span>${RIDER}</div>`;
-  document.body.append(w);
-  return { w, sheet: w.querySelector(".sheet"), rider: w.querySelector(".rider") };
-}
-const RIDE = { duration: 560, easing: "cubic-bezier(.55,.02,.35,1)", fill: "forwards" };
-function wipeOut(href, dir) {
-  const { sheet, rider } = rinkWipe(dir);
-  sheet.animate([{ clipPath: "inset(0 100% 0 0)" }, { clipPath: "inset(0 0% 0 0)" }], RIDE);
-  rider.animate([{ transform: "translateX(0)" }, { transform: "translateX(100vw)" }], RIDE);
-  try { sessionStorage.setItem("onh.wipe", String(dir)); } catch { /* storage blocked: the next page simply appears */ }
-  setTimeout(() => { location.href = href; }, RIDE.duration - 30);
-}
-function wipeIn() {
-  let dir = null;
-  try { dir = sessionStorage.getItem("onh.wipe"); sessionStorage.removeItem("onh.wipe"); } catch { /* no storage, no wipe */ }
-  if (dir === null || calm()) { document.documentElement.classList.remove("wiping"); return; }
-  const { w, sheet, rider } = rinkWipe(+dir);
-  document.documentElement.classList.remove("wiping");
-  const T = { ...RIDE, duration: 680, easing: "cubic-bezier(.25,.55,.3,1)" };
-  sheet.animate([{ clipPath: "inset(0 0 0 0%)" }, { clipPath: "inset(0 0 0 100%)" }], T);
-  rider.animate([{ transform: "translateX(0)" }, { transform: "translateX(100vw)" }], T).onfinish = () => w.remove();
-}
-function initWipe() {
-  wipeIn();
-  addEventListener("pageshow", e => { if (e.persisted) { document.querySelectorAll(".rinkwipe").forEach(x => x.remove()); document.documentElement.classList.remove("wiping"); } });
-  const warmed = new Set();
-  const warm = a => { if (warmed.has(a.href)) return; warmed.add(a.href); const l = document.createElement("link"); l.rel = "prefetch"; l.href = a.href; document.head.append(l); };
-  document.addEventListener("pointerover", e => { const a = e.target.closest && e.target.closest("nav a"); if (a) warm(a); });
-  document.addEventListener("click", e => {
-    const a = e.target.closest && e.target.closest("a[href]");
-    if (!a || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || a.target || a.hasAttribute("download") || calm()) return;
-    const u = new URL(a.href, location.href);
-    if (u.origin !== location.origin || !/(\.html|\/)$/.test(u.pathname) || (u.pathname === location.pathname && u.search === location.search)) return;
-    e.preventDefault();
-    const from = pageSlot(location.pathname), to = pageSlot(u.pathname);
-    wipeOut(u.href, from >= 0 && to >= 0 && to < from ? -1 : 1);
-  });
-}
+addEventListener("pageswap", () => { try { sessionStorage.setItem("onh.from", String(pageSlot(location.pathname))); } catch { /* no storage: the swipe just goes left to right */ } });
 
 const PAGES = { home, team: teamPage, hub, "fantasy-trade": fantasyTrade, "nhl-trade": nhlTrade, schedule: schedulePlanner };
 document.addEventListener("DOMContentLoaded", () => {
-  initWipe();
   const fn = PAGES[document.body.dataset.page];
   if (fn) fn().catch(err => { const m = document.querySelector("main"); m.insertAdjacentHTML("afterbegin", `<p class="panel red">Couldn't load the data (${esc(err.message)}). Try reloading.</p>`); });
 });

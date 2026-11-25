@@ -221,22 +221,6 @@ details.private summary { cursor: pointer; color: var(--ice-blue); font: 600 15p
 details.private ol { padding-left: 18px; }
 .btn.bm { cursor: grab; border-color: var(--amber); color: var(--amber); padding: 6px 10px; }
 
-/* page transition: stick, puck and a sheet of fresh ice (app.js wipeOut / wipeIn) */
-html.wiping::after { content: ""; position: fixed; inset: 0; z-index: 99; background: linear-gradient(180deg, var(--night1), var(--night0)); animation: wipe-failsafe .01s 1.6s forwards; }
-@keyframes wipe-failsafe { to { visibility: hidden; } }
-.rinkwipe { position: fixed; inset: 0; z-index: 100; pointer-events: none; overflow: hidden; }
-.rinkwipe.rev { transform: scaleX(-1); }
-.rinkwipe .sheet { position: absolute; inset: 0; clip-path: inset(0 100% 0 0);
-  background: radial-gradient(ellipse 55% 45% at 50% 38%, rgba(60, 140, 220, .22), transparent 70%), linear-gradient(180deg, var(--night1), var(--night0)); }
-.rinkwipe .rider { position: absolute; left: -250px; top: 50%; width: 250px; height: 184px; will-change: transform; }
-.rinkwipe .rider::before { content: ""; position: absolute; right: -2px; top: -50vh; height: 100vh; width: 3px;
-  background: linear-gradient(180deg, transparent, rgba(220, 240, 255, .75) 30%, rgba(220, 240, 255, .75) 70%, transparent); box-shadow: 0 0 22px 4px rgba(79, 216, 255, .45); }
-.rinkwipe svg { position: absolute; inset: 0; width: 250px; height: 184px; overflow: visible; filter: drop-shadow(0 6px 10px rgba(0, 0, 0, .5)); }
-.rinkwipe .spray { position: absolute; right: 50px; top: 141px; width: 360px; height: 5px; border-radius: 2px;
-  background: linear-gradient(90deg, transparent, rgba(220, 240, 255, .55)); box-shadow: 0 -8px 0 -1px rgba(220, 240, 255, .18), 0 7px 0 -1px rgba(220, 240, 255, .12); }
-@media (max-width: 560px) { .rinkwipe .rider { left: -160px; width: 160px; height: 118px; } .rinkwipe svg { width: 160px; height: 118px; } .rinkwipe .spray { right: 32px; top: 90px; width: 200px; height: 4px; } }
-.pill.out { border-color: var(--red); color: var(--red); }
-
 /* evidence: last-5 bars and the Why panel */
 .spark { display: inline-flex; align-items: flex-end; gap: 3px; height: 26px; vertical-align: middle; }
 .spark i { display: block; width: 7px; border-radius: 2px 2px 0 0; background: rgba(138, 157, 178, .45); }
@@ -249,3 +233,29 @@ tr.detail td { background: rgba(4, 8, 15, .45); border-bottom: 1px solid var(--e
 .whybox p { margin: 0 0 8px; font-size: 14.5px; line-height: 1.5; color: var(--ice-dim); max-width: 78ch; }
 .whybox p strong { color: var(--ice); }
 @media (max-width: 560px) { .why { display: inline-block; margin: 4px 0 0; } .spark { height: 20px; gap: 2px; } .spark i { width: 5px; } }
+
+/* page transition, one pass: the old page stays put while the new one is revealed behind a stick and puck.
+   The rider is parked off-screen on every page; only its snapshot moves, on the compositor, so it stays smooth. */
+@view-transition { navigation: auto; }
+:root { --swipe: 1000ms; --swipe-ease: cubic-bezier(.45, .05, .2, 1); }
+.vt-rider { position: fixed; left: -260px; top: 0; width: 260px; height: 100vh; view-transition-name: rider; pointer-events: none; z-index: -1; }
+.vt-rider::before { content: ""; position: absolute; right: 0; top: 0; bottom: 0; width: 3px;
+  background: linear-gradient(180deg, transparent, rgba(220, 240, 255, .8) 25%, rgba(220, 240, 255, .8) 75%, transparent); box-shadow: 0 0 26px 6px rgba(79, 216, 255, .4); }
+.vt-rider::after { content: ""; position: absolute; right: 44px; top: calc(50% + 50px); width: 340px; height: 5px; border-radius: 3px;
+  background: linear-gradient(90deg, transparent, rgba(220, 240, 255, .5)); box-shadow: 0 -9px 0 -1px rgba(220, 240, 255, .16), 0 8px 0 -1px rgba(220, 240, 255, .1); }
+.vt-rider svg { position: absolute; right: 0; top: calc(50% - 92px); width: 250px; height: 184px; overflow: visible; filter: drop-shadow(0 8px 12px rgba(0, 0, 0, .55)); }
+::view-transition-group(root), ::view-transition-old(rider) { animation: none; }
+::view-transition-old(root) { animation: var(--swipe) var(--swipe-ease) both swipe-old; }
+::view-transition-new(root) { animation: var(--swipe) var(--swipe-ease) both swipe-new; }
+::view-transition-group(rider) { animation: var(--swipe) var(--swipe-ease) both swipe-ride; }
+::view-transition-new(rider) { animation: none; }
+@keyframes swipe-new { from { clip-path: inset(0 100% 0 0); } 88%, to { clip-path: inset(0 0 0 0); } }
+@keyframes swipe-old { to { filter: brightness(.6); } }
+@keyframes swipe-ride { from { transform: translateX(0); } 88% { transform: translateX(100vw); } to { transform: translateX(calc(100vw + 260px)); } }
+/* a tab to the left: the same swipe, mirrored */
+html:active-view-transition-type(left)::view-transition-new(root) { animation-name: swipe-new-left; }
+html:active-view-transition-type(left)::view-transition-group(rider) { animation-name: swipe-ride-left; }
+@keyframes swipe-new-left { from { clip-path: inset(0 0 0 100%); } 88%, to { clip-path: inset(0 0 0 0); } }
+@keyframes swipe-ride-left { from { transform: translateX(calc(100vw + 260px)) scaleX(-1); } 88% { transform: translateX(260px) scaleX(-1); } to { transform: translateX(0) scaleX(-1); } }
+@media (max-width: 560px) { .vt-rider svg { width: 170px; height: 125px; top: calc(50% - 62px); } .vt-rider::after { width: 220px; right: 30px; top: calc(50% + 34px); } }
+@media (prefers-reduced-motion: reduce) { @view-transition { navigation: none; } }
