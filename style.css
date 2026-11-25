@@ -259,3 +259,25 @@ html:active-view-transition-type(left)::view-transition-group(rider) { animation
 @keyframes swipe-ride-left { from { transform: translateX(calc(100vw + 260px)) scaleX(-1); } 88% { transform: translateX(260px) scaleX(-1); } to { transform: translateX(0) scaleX(-1); } }
 @media (max-width: 560px) { .vt-rider svg { width: 170px; height: 125px; top: calc(50% - 62px); } .vt-rider::after { width: 220px; right: 30px; top: calc(50% + 34px); } }
 @media (prefers-reduced-motion: reduce) { @view-transition { navigation: none; } }
+
+/* week grid: each column carries its day, date and game count; each cell its opponent */
+.wk-grid { table-layout: fixed; min-width: 820px; }
+.wk-grid th { text-transform: none; }
+.wk-grid thead th:first-child, .wk-grid tbody th { width: 64px; }
+.wk-grid thead th.num { width: 70px; white-space: normal; }
+.wk-grid th.day { text-align: center; vertical-align: bottom; padding: 8px 4px; }
+.wk-grid th.day span { display: block; }
+.wk-grid .dn { font: 700 16px/1.1 var(--head); color: var(--ice); }
+.wk-grid .dd { font-size: 12px; color: var(--steel); }
+.wk-grid .dc { font-size: 12px; color: var(--ice-dim); margin-top: 3px; }
+.wk-grid .dk { font: 700 11px/1.2 var(--head); letter-spacing: .03em; }
+.wk-grid th.light .dk { color: var(--ice-blue); }
+.wk-grid th.packed .dk, .wk-grid th.packed .dc { color: var(--red); }
+.wk-grid th.light, .wk-grid td.light { background: rgba(79, 216, 255, .09); }
+.wk-grid tbody th { font: 700 16px/1 var(--head); color: var(--ice); text-align: left; }
+.wk-grid td.g { text-align: center; white-space: nowrap; font-size: 14px; color: var(--ice); }
+.wk-grid td.g:empty::before { content: "\2013"; color: rgba(138, 157, 178, .35); }
+.wk-grid td.g.b2b::after { content: "*"; color: var(--amber); margin-left: 1px; }
+.wk-grid thead th:first-child, .wk-grid tbody th { position: sticky; left: 0; z-index: 1; background: #0a1626; }
+.wk-grid tbody th .pill { display: block; width: max-content; margin-top: 3px; }
+tr.mine th { box-shadow: inset 3px 0 0 var(--amber); }

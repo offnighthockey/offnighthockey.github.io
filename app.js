@@ -810,10 +810,10 @@ function weekGrid(Z, mon, span, sort) {
   }
   const days = Array.from({ length: 7 }, (_, i) => addDays(mon, i));
   const head = days.map(d => { const n = Z.perDay.get(d) || 0, k = nightKind(n);
-    return `<th class="num ${k === "light" ? "light" : ""}">${dayName(d)}<br><span class="small ${k === "light" ? "" : "muted"}">${n ? (k === "light" ? "LIGHT " : k === "packed" ? "PACKED " : "") + n : "NO GAMES"}</span></th>`; }).join("");
-  return `<div class="scroll"><table class="sched"><thead><tr><th>Team</th>${head}<th class="num">GP</th><th class="num">Light</th><th class="num">B2B</th></tr></thead><tbody>${
-    rows.map(r => `<tr${mine.has(r.t) ? ' class="mine"' : ""}><td>${teamCell(r.t, mine)}</td>${days.map(d => { const g = r.g.find(x => x.d === d), k = nightKind(Z.perDay.get(d) || 0);
-      return `<td class="opp ${k === "light" ? "light" : ""}">${g ? `${g.home ? "vs" : "@"} ${esc(g.opp)}${g.b2b ? "*" : ""}` : ""}</td>`; }).join("")}<td class="num led">${r.games}</td><td class="num">${r.light}</td><td class="num">${r.b2b}</td></tr>`).join("")}</tbody></table></div>`;
+    return `<th class="day ${k}" scope="col"><span class="dn">${dayName(d)}</span><span class="dd">${dayDate(d)}</span><span class="dc">${n ? n + (n === 1 ? " game" : " games") : "no games"}</span>${k === "light" ? '<span class="dk">light night</span>' : k === "packed" ? '<span class="dk">packed</span>' : ""}</th>`; }).join("");
+  return `<div class="scroll"><table class="wk-grid"><thead><tr><th scope="col">Team</th>${head}<th class="num" scope="col">Games</th><th class="num" scope="col">On light nights</th><th class="num" scope="col">Back-to-backs</th></tr></thead><tbody>${
+    rows.map(r => `<tr${mine.has(r.t) ? ' class="mine"' : ""}><th scope="row">${teamCell(r.t, mine)}</th>${days.map(d => { const g = r.g.find(x => x.d === d), k = nightKind(Z.perDay.get(d) || 0);
+      return `<td class="g ${k}${g && g.b2b ? " b2b" : ""}">${g ? `${g.home ? "vs" : "@"} ${esc(g.opp)}` : ""}</td>`; }).join("")}<td class="num led">${r.games}</td><td class="num">${r.light}</td><td class="num">${r.b2b || ""}</td></tr>`).join("")}</tbody></table></div>`;
 }
 function nightStrip(Z, mon) {
   return `<div class="board">${Array.from({ length: 7 }, (_, i) => addDays(mon, i)).map(d => { const n = Z.perDay.get(d) || 0, k = nightKind(n);
