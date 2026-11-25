@@ -126,7 +126,24 @@ const ESPN_SLOT = { 0: "C", 1: "LW", 2: "RW", 3: "F", 4: "D", 5: "G", 6: "UTIL" 
 const ESPN_STAT = { 13: "G", 14: "A", 15: "PM", 38: "PPP", 39: "SHP", 29: "SOG", 31: "HIT", 32: "BLK", 1: "W", 4: "GA", 6: "SV", 7: "SO", 9: "OTL" };   // checked against an ESPN default league
 const G_STAT = new Set(["W", "GA", "SV", "SO", "OTL"]);
 const espnURL = (lid, season) => `https://lm-api-reads.fantasy.espn.com/apis/v3/games/fhl/seasons/${season}/segments/0/leagues/${lid}?view=mSettings&view=mTeam&view=mRoster&view=mMatchup&view=mStatus`;
-let LEAGUE = null, TAKEN = new Set(), ELIG = {}, LINEUP = {};
+let LEAGUE = null, TAKEN = new Set(), ELIG = {}, LINEUP = {}, INJ = {}, GSTART = {};
+const FA_GOALIE_FILTER = JSON.stringify({ players: { filterSlotIds: { value: [5] }, filterStatus: { value: ["FREEAGENT", "WAIVERS"] }, limit: 40, sortPercOwned: { sortPriority: 1, sortAsc: false } } });
+const startsOf = p => Object.entries(p.starterStatusByProGame || {}).sort((a, b) => a[0] - b[0]).slice(-4).map(([g, st]) => g + ":" + st[0]).join(",");
+async function faGoalies(lid, season) {   // free-agent goalies in the league, with ESPN's expected and confirmed starts
+  const j = await fetch(`https://lm-api-reads.fantasy.espn.com/apis/v3/games/fhl/seasons/${season}/segments/0/leagues/${lid}?view=kona_player_info`, { headers: { "x-fantasy-filter": FA_GOALIE_FILTER } }).then(r => r.json());
+  return (j.players || []).map(x => [x.player.fullName, x.player.proTeamId, startsOf(x.player), x.player.injuryStatus && x.player.injuryStatus !== "ACTIVE" ? x.player.injuryStatus : ""]);
+}
+async function espnDates(season) {   // ESPN game id -> date, for the next two weeks; ESPN's schedule is big, so once a day per browser
+  const day = todayISO(), c = store.get("espnDates", null);
+  if (c && c.day === day && c.season === season) return c.map;
+  const j = await fetch(`https://lm-api-reads.fantasy.espn.com/apis/v3/games/fhl/seasons/${season}?view=proTeamSchedules_wl`).then(r => r.json());
+  const map = {}, lo = addDays(day, -1), hi = addDays(day, 14);
+  (j.settings.proTeams || []).forEach(t => Object.values(t.proGamesByScoringPeriod || {}).flat().forEach(g => {
+    const d = new Date(g.date).toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+    if (d >= lo && d <= hi) map[g.id] = d; }));
+  store.set("espnDates", { day, season, map });
+  return map;
+}
 const normName = s => s.normalize("NFKD").replace(/[^a-z0-9]/gi, "").toLowerCase();
 let NAMEIDX = null;
 function playerByName(name, pro, elig = "") {
@@ -150,13 +167,19 @@ function espnTrim(j, lid, season, tid) {
     acq: S.acquisitionSettings.matchupAcquisitionLimit, wday: (S.acquisitionSettings.waiverProcessDays || [])[0] || "",
     opp: them ? them.teamId : null, pts: me ? [me.totalPoints || 0, them.totalPoints || 0] : null,
     teams: j.teams.map(t => [t.id, t.name || t.abbrev, (t.roster ? t.roster.entries : []).map(e => { const p = e.playerPoolEntry.player;
-      return [p.fullName, p.proTeamId, e.lineupSlotId, p.eligibleSlots.filter(s => s < 7).join("."), p.injuryStatus && p.injuryStatus !== "ACTIVE" ? p.injuryStatus : ""]; })]),
+      return [p.fullName, p.proTeamId, e.lineupSlotId, p.eligibleSlots.filter(s => s < 7).join("."), p.injuryStatus && p.injuryStatus !== "ACTIVE" ? p.injuryStatus : "",
+        Object.entries(p.starterStatusByProGame || {}).sort((a, b) => a[0] - b[0]).slice(-4).map(([g, st]) => g + ":" + st[0]).join(",")]; })]),
     at: Date.now() };
 }
 function applyLeague(snap) {
-  LEAGUE = snap; TAKEN = new Set(); ELIG = {}; LINEUP = {};
+  LEAGUE = snap; TAKEN = new Set(); ELIG = {}; LINEUP = {}; INJ = {}; GSTART = {};
+  const dates = snap.dates || {};
+  const addStarts = (p, starts) => (starts || "").split(",").filter(Boolean).forEach(x => { const [g, st] = x.split(":"), d = dates[g];
+    if (d) (GSTART[d] = GSTART[d] || {})[p.t] = { id: p.id, s: st === "C" ? "Confirmed" : "Expected" }; });
   const rosterOf = tid => (snap.teams.find(t => t[0] === tid) || [0, "", []])[2];
-  snap.teams.forEach(t => t[2].forEach(([n, pro, , el]) => { const p = playerByName(n, pro, el); if (p) TAKEN.add(p.id); }));
+  snap.teams.forEach(t => t[2].forEach(([n, pro, , el, inj, starts]) => { const p = playerByName(n, pro, el);
+    if (!p) return; TAKEN.add(p.id); if (inj) INJ[p.id] = inj; addStarts(p, starts); }));
+  (snap.fag || []).forEach(([n, pro, starts, inj]) => { const p = playerByName(n, pro, "5"); if (!p) return; if (inj) INJ[p.id] = inj; addStarts(p, starts); });
   const mine = [], missing = [];
   rosterOf(snap.tid).forEach(([n, pro, slot, el, inj]) => {
     const p = playerByName(n, pro, el);
@@ -199,8 +222,9 @@ async function loadLeague() {   // every visit: public leagues refresh from ESPN
   }
   const E = store.get("espn", null);
   if (!E) return null;
-  if (E.private && E.snap) { applyLeague(E.snap); return LEAGUE; }
-  try { const { snap } = await fetchLeague(E.lid, E.season, E.tid); applyLeague(snap); return LEAGUE; }
+  const dates = await espnDates(E.season).catch(() => ({}));
+  if (E.private && E.snap) { applyLeague({ ...E.snap, dates }); return LEAGUE; }
+  try { const { snap } = await fetchLeague(E.lid, E.season, E.tid); snap.fag = await faGoalies(E.lid, E.season).catch(() => []); snap.dates = dates; applyLeague(snap); return LEAGUE; }
   catch (err) { store.set("espnError", err.message === "private" ? "ESPN says this league is private now. Use the one-click sync below." : "Couldn't reach ESPN just now. Showing your saved roster."); return null; }
 }
 const isFree = (p, k, cut) => LEAGUE ? !TAKEN.has(p.id) : perGame(p, FORMATS[k], k) < cut;
@@ -209,7 +233,10 @@ function bookmarkletHref() {
     + `if(!/espn\\.com$/.test(location.hostname)||!lid){location.href=home+"#espn-error=open-league";return}`
     + `const j=await fetch("https://lm-api-reads.fantasy.espn.com/apis/v3/games/fhl/seasons/"+season+"/segments/0/leagues/"+lid+"?view=mSettings&view=mTeam&view=mRoster&view=mMatchup&view=mStatus",{credentials:"include"}).then(r=>r.json());`
     + `const sw=decodeURIComponent((document.cookie.match(/SWID=([^;]+)/)||[])[1]||"");const tid=+q.get("teamId")||(j.teams.find(t=>(t.owners||[]).includes(sw))||{}).id;`
-    + `const espnTrim=${espnTrim.toString()};location.href=home+"#espn="+encodeURIComponent(JSON.stringify(espnTrim(j,lid,season,tid)))})()`;
+    + `const espnTrim=${espnTrim.toString()};const snap=espnTrim(j,lid,season,tid);`
+    + `try{const fj=await fetch("https://lm-api-reads.fantasy.espn.com/apis/v3/games/fhl/seasons/"+season+"/segments/0/leagues/"+lid+"?view=kona_player_info",{credentials:"include",headers:{"x-fantasy-filter":${JSON.stringify(FA_GOALIE_FILTER)}}}).then(r=>r.json());`
+    + `snap.fag=(fj.players||[]).map(x=>[x.player.fullName,x.player.proTeamId,Object.entries(x.player.starterStatusByProGame||{}).sort((a,b)=>a[0]-b[0]).slice(-4).map(([g,s])=>g+":"+s[0]).join(","),x.player.injuryStatus&&x.player.injuryStatus!=="ACTIVE"?x.player.injuryStatus:""])}catch(e){}`
+    + `location.href=home+"#espn="+encodeURIComponent(JSON.stringify(snap))})()`;
   return "javascript:" + encodeURIComponent(src);
 }
 const SEASON_ESPN = "2027";   // ESPN names a season by the year it ends
@@ -220,14 +247,17 @@ function parseLeagueLink(text) {
 }
 function lineupFix(Z, d, mine, f, k) {   // ESPN's saved lineup against the best one, for players who play that night
   if (!LEAGUE) return null;
-  const rows = mine.filter(p => Z.plays.has(p.t + d)).map(p => ({ p, v: perGame(p, f, k) }));
+  const playing = mine.filter(p => Z.plays.has(p.t + d));
+  const rows = playing.filter(p => !isOut(p) && startOn(p, d) > 0).map(p => ({ p, v: perGame(p, f, k) }));
   const { used } = nightLineup(rows, slotSet());
   const benchIn = rows.filter(r => used.has(r.p.id) && LINEUP[r.p.id] === 7).sort((a, b) => b.v - a.v);
-  const startOut = rows.filter(r => !used.has(r.p.id) && LINEUP[r.p.id] !== 7 && LINEUP[r.p.id] !== 8).sort((a, b) => a.v - b.v);
+  // starters to pull: the out ones first (they score nothing), then the weakest who lost their spot
+  const dead = playing.filter(p => (isOut(p) || startOn(p, d) === 0) && LINEUP[p.id] !== 7 && LINEUP[p.id] !== 8).map(p => ({ p, v: 0, out: true }));
+  const startOut = dead.concat(rows.filter(r => !used.has(r.p.id) && LINEUP[r.p.id] !== 7 && LINEUP[r.p.id] !== 8).sort((a, b) => a.v - b.v));
   const n = Math.min(benchIn.length, startOut.length);
   if (!n) return null;
   const ins = benchIn.slice(0, n), outs = startOut.slice(0, n);
-  return { ins, outs, gain: ins.reduce((a, r) => a + r.v * startShare(r.p), 0) - outs.reduce((a, r) => a + r.v * startShare(r.p), 0) };
+  return { ins, outs, gain: ins.reduce((a, r) => a + r.v * startOn(r.p, d), 0) - outs.reduce((a, r) => a + r.v * (r.out ? 0 : startOn(r.p, d)), 0) };
 }
 
 /* ---------- shared: the header scoring picker and the night board ---------- */
@@ -259,13 +289,13 @@ const who = p => `${esc(p.n)}<span class="meta">${esc(p.t)} ${POS[p.p]}</span>`;
 function myRoster() { const byId = new Map(everyone().map(p => [p.id, p])); return store.get("team", []).map(id => byId.get(id)).filter(Boolean); }
 function nightStreamers(Z, d, k, n, fitsOpen) {
   const f = FORMATS[k], teams = new Set(teamsOn(Z, d)), cut = waiverCut(k), have = new Set(store.get("team", []));
-  return DATA.skaters.filter(p => teams.has(p.t) && !have.has(p.id) && p.gp >= 5 && p.rgp >= 3 && (!fitsOpen || fitsOpen(p)) && isFree(p, k, cut))
+  return DATA.skaters.filter(p => teams.has(p.t) && !have.has(p.id) && p.gp >= 5 && p.rgp >= 3 && !isOut(p) && (!fitsOpen || fitsOpen(p)) && isFree(p, k, cut))
     .map(p => ({ p, v: perGame(p, f, k), r: recentRate(p, f) }))
     .sort((a, b) => (b.r ?? b.v) + b.v - ((a.r ?? a.v) + a.v)).slice(0, n);   // rank by blended rate plus recent form, so hot players rise
 }
 function nightGoalies(Z, d, k, n) {
   const f = FORMATS[k], teams = new Set(teamsOn(Z, d));
-  return DATA.goalies.filter(g => teams.has(g.t) && g.gs >= 3).map(g => ({ p: g, share: startShare(g), v: perGame(g, f, k) }))
+  return DATA.goalies.filter(g => teams.has(g.t) && g.gs >= 3 && !isOut(g)).map(g => ({ p: g, share: startOn(g, d), call: ((GSTART[d] || {})[g.t] || {}).id === g.id ? GSTART[d][g.t].s : "", v: perGame(g, f, k) }))
     .filter(x => x.share >= 0.35).sort((a, b) => b.share * b.v - a.share * a.v).slice(0, n);
 }
 function standingsHTML(standings) {
@@ -290,6 +320,16 @@ function slotSet() { const k = slotKey(); return k === "custom" ? store.get("slo
 const POS = { C: "C", L: "LW", R: "RW", D: "D", G: "G" };
 const fits = (p, slot) => ELIG[p.id] ? ELIG[p.id].includes(slot) : slot === POS[p.p] || (slot === "F" && "CLR".includes(p.p)) || (slot === "UTIL" && p.p !== "G");
 const startShare = p => isG(p) ? Math.min(1, p.gs / Math.max(DATA.teams[p.t].played, 1)) : 1;   // a goalie only counts when he starts
+// Out: his team played at least twice in the last 7 days and he didn't dress (injury, suspension, scratch, sent down), or ESPN lists him out
+const OUT_INJ = new Set(["OUT", "INJURY_RESERVE", "SUSPENSION"]);
+const missing = p => !isG(p) && p.gp >= 3 && (DATA.teams[p.t] || {}).g7 >= 2 && !p.l7;
+const isOut = p => OUT_INJ.has(INJ[p.id]) || missing(p);
+const outLabel = p => INJ[p.id] === "SUSPENSION" ? "SUSP" : INJ[p.id] === "DAY_TO_DAY" ? "DTD" : isOut(p) ? "OUT" : "";
+function startOn(p, d) {   // ESPN's expected or confirmed starter takes the night; his teammate gets none
+  if (!isG(p)) return 1;
+  const g = (GSTART[d] || {})[p.t];
+  return g ? (g.id === p.id ? 1 : 0) : startShare(p);
+}
 function nightLineup(playing, slots) {
   // Positions come from the NHL (one each), so filling each position's own slots by value, then UTIL with the best leftover, is the best lineup.
   const left = { ...slots }, used = new Map(), order = [...playing].sort((a, b) => b.v - a.v);
@@ -306,10 +346,10 @@ function usableWeek(Z, mine, from, to, slots, f, key) {
   const nights = [];
   for (let d = from; d <= to; d = addDays(d, 1)) {
     const n = Z.perDay.get(d) || 0;
-    const playing = rows.filter(r => Z.plays.has(r.p.t + d));
+    const playing = rows.filter(r => Z.plays.has(r.p.t + d) && !isOut(r.p) && startOn(r.p, d) > 0);   // out players and goalies who won't start don't dress
     playing.forEach(r => { r.games++; if (n && n <= LIGHT) r.light++; });
     const { used, left } = nightLineup(playing, slots);
-    used.forEach((_, id) => { const r = rows.find(x => x.p.id === id); r.used += startShare(r.p); });
+    used.forEach((_, id) => { const r = rows.find(x => x.p.id === id); r.used += startOn(r.p, d); });
     nights.push({ d, n, left, playing, used });
   }
   return { rows, nights };
@@ -317,7 +357,7 @@ function usableWeek(Z, mine, from, to, slots, f, key) {
 const openSkaters = left => Object.entries(left).filter(([s]) => s !== "G").reduce((a, [, k]) => a + k, 0);
 function bestAdds(Z, wk, mine, f, key) {
   const cut = waiverCut(key), have = new Set(mine.map(p => p.id));
-  return DATA.skaters.filter(p => !have.has(p.id) && p.gp >= 5 && p.rgp >= 3 && isFree(p, key, cut)).map(p => ({ p, v: perGame(p, f, key) }))
+  return DATA.skaters.filter(p => !have.has(p.id) && p.gp >= 5 && p.rgp >= 3 && !isOut(p) && isFree(p, key, cut)).map(p => ({ p, v: perGame(p, f, key) }))
     .map(x => ({ ...x, add: wk.nights.filter(nt => nt.n && Z.plays.has(x.p.t + nt.d) && Object.keys(nt.left).some(s => nt.left[s] > 0 && fits(x.p, s))).length }))
     .filter(x => x.add).map(x => ({ ...x, total: x.add * x.v })).sort((a, b) => b.total - a.total).slice(0, 8);
 }
@@ -349,8 +389,8 @@ async function home() {
     if (show === "g") {
       const gs = nightGoalies(Z, sel, k, 10);
       $("#np-list").innerHTML = `<div class="scroll"><table><thead><tr><th>Goalie</th><th class="num">Share of starts</th><th class="num">${f.type === "points" ? "Pts per start" : "Value per start"}</th></tr></thead><tbody>${
-        gs.map(x => `<tr><td>${who(x.p)}</td><td class="num">${Math.round(x.share * 100)}%</td><td class="num led">${fmt(x.v, 2)}</td></tr>`).join("")}</tbody></table></div>
-        <p class="note">Teams don't announce starters a day ahead, so this is each goalie's share of his team's starts this season.</p>`;
+        gs.map(x => `<tr><td>${who(x.p)}${x.call ? ` <span class="pill${x.call === "Confirmed" ? "" : " amber"}">${x.call}</span>` : ""}</td><td class="num">${x.call ? "Starting" : Math.round(x.share * 100) + "%"}</td><td class="num led">${fmt(x.v, 2)}</td></tr>`).join("")}</tbody></table></div>
+        <p class="note">${LEAGUE ? "Confirmed and expected starters come from ESPN; the rest show each goalie's share of his team's starts this season." : "Each goalie's share of his team's starts this season. Connect your ESPN league to see expected and confirmed starters."}</p>`;
       return;
     }
     const st = nightStreamers(Z, sel, k, 8);
@@ -375,7 +415,7 @@ async function home() {
     const empty = W.nights.filter(nt => nt.n).reduce((a, nt) => a + openSkaters(nt.left), 0), top = bestAdds(Z, W, mine, f, k)[0];
     const on = mine.filter(p => Z.plays.has(p.t + sel)).length;
     const fix = sel === today ? lineupFix(Z, today, mine, f, k) : null;
-    $("#snap-body").innerHTML = (fix ? `<p class="alert">Lineup fix tonight: start ${fix.ins.map(r => esc(r.p.n)).join(", ")} over ${fix.outs.map(r => esc(r.p.n)).join(", ")} (about +${fmt(fix.gain, 1)}).</p>` : "")
+    $("#snap-body").innerHTML = (fix ? `<p class="alert">Lineup fix tonight: start ${fix.ins.map(r => esc(r.p.n)).join(", ")} over ${fix.outs.map(r => esc(r.p.n) + (r.out ? " (" + (isG(r.p) ? "not starting" : "out") + ")" : "")).join(", ")} (about +${fmt(fix.gain, 1)}).</p>` : "")
       + `<p class="big-line"><span class="led">${fmt(tot.u, 0)}</span> of ${fmt(tot.g, 0)} games usable</p>
       <p class="note">${wk ? "Next week" : from === today ? "Rest of this week" : "This week"}, with ${empty} empty skater spot-nights.</p>
       <p>${sel === today ? "Tonight" : dayName(sel)}: ${on} of your ${mine.length} players play.</p>
@@ -464,7 +504,7 @@ async function teamPage() {
   const draw = () => {
     const mine = myRoster(), k = league().k, f = FORMATS[k], [from, to] = range(), slots = slotSet();
     $("#roster-count").textContent = mine.length ? `${mine.length} players` : "";
-    $("#roster").innerHTML = mine.map(p => `<li><span>${esc(p.n)}<span class="pos">${esc(p.t)} ${POS[p.p]}</span></span><button class="x" type="button" data-rm="${p.id}" aria-label="Remove ${esc(p.n)}">×</button></li>`).join("");
+    $("#roster").innerHTML = mine.map(p => `<li><span>${esc(p.n)}<span class="pos">${esc(p.t)} ${POS[p.p]}</span>${outLabel(p) ? ` <span class="pill out">${outLabel(p)}</span>` : ""}</span><button class="x" type="button" data-rm="${p.id}" aria-label="Remove ${esc(p.n)}">×</button></li>`).join("");
     const W = usableWeek(Z, mine, from, to, slots, f, k), withGames = W.nights.filter(nt => nt.n);
     if (!sel || !W.nights.some(nt => nt.d === sel)) sel = (withGames[0] || W.nights[0]).d;
     $("#board").innerHTML = boardHTML(W.nights.map(nt => nt.d), sel, d => { const nt = W.nights.find(x => x.d === d), o = openSkaters(nt.left);
@@ -489,16 +529,19 @@ async function teamPage() {
         Projected final <b>${fmt(ma, 0)}</b> to <b>${fmt(mb, 0)}</b>${Math.abs(ma - mb) < 8 ? ", close enough that one add or lineup call matters." : ma > mb ? ", you're ahead." : ", you're behind: use your open spots."}</p>`;
     }
     const fx = span === "rest" ? lineupFix(Z, today, mine, f, k) : null;
-    if (fx) fixHTML = `<p class="alert">Lineup fix tonight: start ${fx.ins.map(r => esc(r.p.n)).join(", ")} over ${fx.outs.map(r => esc(r.p.n)).join(", ")}. About +${fmt(fx.gain, 1)} points. (Your ESPN lineup as of the last sync.)</p>`;
+    if (fx) fixHTML = `<p class="alert">Lineup fix tonight: start ${fx.ins.map(r => esc(r.p.n)).join(", ")} over ${fx.outs.map(r => esc(r.p.n) + (r.out ? " (" + (isG(r.p) ? "not starting" : "out") + ")" : "")).join(", ")}. About +${fmt(fx.gain, 1)} points. (Your ESPN lineup as of the last sync.)</p>`;
     $("#summary").innerHTML = fixHTML + matchup + `<p class="big-line">You can use <span class="led">${fmt(tot.u, 0)}</span> of your players' ${fmt(tot.g, 0)} games</p>
       <p class="note">${dayDate(from)} to ${dayDate(to)}. ${tot.g - tot.u >= 0.5 ? `${fmt(tot.g - tot.u, 0)} sit on your bench on crowded nights. ` : ""}${empty ? `${empty} skater spot-nights stay empty${worst && openSkaters(worst.left) ? `, most on ${dayName(worst.d)} (${openSkaters(worst.left)})` : ""}. Empty spots score zero.` : "Every spot is filled every night."}</p>`;
     const nt = W.nights.find(x => x.d === sel), bySlot = {};
     nt.used.forEach((slot, id) => (bySlot[slot] = bySlot[slot] || []).push(nt.playing.find(r => r.p.id === id)));
     const benched = nt.playing.filter(r => !nt.used.has(r.p.id)), open = Object.entries(nt.left).filter(([, c]) => c > 0);
+    const sitting = mine.filter(p => Z.plays.has(p.t + sel) && (isOut(p) || startOn(p, sel) === 0));
+    const gcall = p => { const g = (GSTART[sel] || {})[p.t]; return isG(p) && g && g.id === p.id ? ` <span class="pill${g.s === "Confirmed" ? "" : " amber"}">${g.s}</span>` : ""; };
     const fill = open.length ? nightStreamers(Z, sel, k, 5, p => open.some(([s]) => s !== "G" && fits(p, s))) : [];
     $("#night-detail").innerHTML = `<div class="panel-head"><h2>${longDate(sel)}</h2><span class="note">${nt.n ? nt.n + " NHL games" : "No NHL games"}</span></div>
       ${!nt.n ? `<p class="note">Nobody plays. Pick another night on the board.</p>` : `<div class="lineup">
-      <div><h3>Starting (${nt.used.size})</h3><ul>${Object.entries(bySlot).sort(([a], [b]) => SLOT_KEYS.indexOf(a) - SLOT_KEYS.indexOf(b)).map(([s, rs]) => rs.map(r => `<li>${who(r.p)} <span class="pill">${s}</span></li>`).join("")).join("") || "<li class='muted'>Nobody plays tonight</li>"}</ul></div>
+      <div><h3>Starting (${nt.used.size})</h3><ul>${Object.entries(bySlot).sort(([a], [b]) => SLOT_KEYS.indexOf(a) - SLOT_KEYS.indexOf(b)).map(([s, rs]) => rs.map(r => `<li>${who(r.p)}${gcall(r.p)} <span class="pill">${s}</span></li>`).join("")).join("") || "<li class='muted'>Nobody plays tonight</li>"}</ul>
+      ${sitting.length ? `<h3 style="margin-top:14px">Not playing</h3><ul>${sitting.map(p => `<li>${who(p)} <span class="pill out">${isG(p) ? "BACKUP" : outLabel(p) || "OUT"}</span></li>`).join("")}</ul>` : ""}</div>
       <div><h3>On the bench (${benched.length})</h3><ul>${benched.map(r => `<li>${who(r.p)}</li>`).join("") || "<li class='muted'>Nobody. Everyone who plays starts.</li>"}</ul>
       <h3 style="margin-top:14px">Open spots</h3><p>${open.length ? open.map(([s, c]) => `${c} ${s}`).join(", ") : "None"}</p></div>
       <div><h3>Fill an open spot</h3><ul>${fill.map(x => `<li>${who(x.p)} <span class="led">${fmt(x.v, 2)}</span></li>`).join("") || "<li class='muted'>No open skater spots</li>"}</ul></div></div>`}`;
@@ -510,7 +553,7 @@ async function teamPage() {
     $("#mine").innerHTML = `<div class="scroll"><table><thead><tr><th>Player</th><th class="num">Games</th><th class="num">Usable</th><th class="num">Benched</th><th class="num">Light nights</th><th class="num">Per game</th></tr></thead><tbody>${
       W.rows.map(r => { const g = r.games * startShare(r.p), bench = g - r.used, d = isG(r.p) ? 1 : 0;
         return `<tr><td>${who(r.p)}</td><td class="num">${fmt(g, d)}</td><td class="num led">${fmt(r.used, d)}</td><td class="num${bench >= 0.5 ? " warn" : ""}">${bench >= 0.5 ? fmt(bench, d) : ""}</td><td class="num">${r.light}</td><td class="num">${fmt(r.v, 2)}</td></tr>`; }).join("")}</tbody></table></div>
-      <p class="note">Goalies count expected starts (his share of his team's starts). Positions come from the NHL, one per player.</p>`;
+      <p class="note">Goalies count expected starts (ESPN's starter call when we have it, otherwise his share of his team's starts). OUT means his team has played twice or more in the last 7 days without him, or ESPN lists him out, so he doesn't count.</p>`;
   };
   playerPicker($("#add-mine"), p => { const t = store.get("team", []); if (!t.includes(p.id)) { store.set("team", t.concat(p.id)); draw(); } });
   $("#roster").addEventListener("click", e => { const x = e.target.closest("[data-rm]"); if (!x) return;
@@ -754,7 +797,7 @@ function rinkWipe(dir) {
   document.body.append(w);
   return { w, sheet: w.querySelector(".sheet"), rider: w.querySelector(".rider") };
 }
-const RIDE = { duration: 360, easing: "cubic-bezier(.62,.02,.35,1)", fill: "forwards" };
+const RIDE = { duration: 560, easing: "cubic-bezier(.55,.02,.35,1)", fill: "forwards" };
 function wipeOut(href, dir) {
   const { sheet, rider } = rinkWipe(dir);
   sheet.animate([{ clipPath: "inset(0 100% 0 0)" }, { clipPath: "inset(0 0% 0 0)" }], RIDE);
@@ -768,7 +811,7 @@ function wipeIn() {
   if (dir === null || calm()) { document.documentElement.classList.remove("wiping"); return; }
   const { w, sheet, rider } = rinkWipe(+dir);
   document.documentElement.classList.remove("wiping");
-  const T = { ...RIDE, duration: 460, easing: "cubic-bezier(.2,.6,.3,1)" };
+  const T = { ...RIDE, duration: 680, easing: "cubic-bezier(.25,.55,.3,1)" };
   sheet.animate([{ clipPath: "inset(0 0 0 0%)" }, { clipPath: "inset(0 0 0 100%)" }], T);
   rider.animate([{ transform: "translateX(0)" }, { transform: "translateX(100vw)" }], T).onfinish = () => w.remove();
 }
