@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex">
+<title>Off-Night lab C: Analyst</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&display=swap"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Doto:wght@800&display=swap"><link rel="icon" href="icon.png"><link rel="stylesheet" href="style.css?v=lab">
+<style>
+.tb { display: inline-flex; align-items: center; justify-content: center; min-width: 40px; height: 26px; padding: 0 6px; border-radius: 7px; vertical-align: middle;
+  background: linear-gradient(135deg, var(--c1) 0 68%, var(--c2) 68% 100%); color: var(--fg); font: 700 14px/1 var(--head); letter-spacing: .04em;
+  box-shadow: inset 0 0 0 1.5px rgba(255,255,255,.16), 0 2px 8px rgba(0,0,0,.35); }
+.tb.sm { min-width: 34px; height: 22px; font-size: 12px; border-radius: 6px; }
+.tb.lg { min-width: 58px; height: 38px; font-size: 19px; border-radius: 10px; }
+.tb.xl { min-width: 92px; height: 60px; font-size: 30px; border-radius: 14px; }
+.labtabs { position: relative; }
+.labtabs button { position: relative; z-index: 1; cursor: pointer; transition: color .2s, transform .15s; }
+.labtabs button:active { transform: scale(.96); }
+.labtabs .ind { view-transition-name: tabind; pointer-events: none; }
+.labtabs:has([data-tab=mine][aria-selected=true]) { --x: 1; } .labtabs:has([data-tab=team][aria-selected=true]) { --x: 2; }
+.labswitch { position: fixed; left: 12px; bottom: 12px; z-index: 40; display: flex; gap: 4px; padding: 4px; border-radius: 999px; background: rgba(4,8,15,.9); border: 1px solid var(--edge); font: 600 13px/1 var(--head); }
+.labswitch a { color: var(--steel); text-decoration: none; padding: 6px 10px; border-radius: 999px; }
+.labswitch a[aria-current] { background: var(--ice-blue); color: var(--night0); }
+.why-line, .note { color: var(--steel); font-size: 14px; }
+button[data-night], button[data-team] { cursor: pointer; font: inherit; color: inherit; }
+@media (max-width: 860px) { body { padding-bottom: 60px; } .labswitch { bottom: 10px; left: 50%; transform: translateX(-50%); } }
+
+body { display: grid; grid-template-columns: 250px 1fr; min-height: 100vh; background: #060c16; }
+.rail { position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; gap: 16px; padding: 18px 14px; background: #08111e; border-right: 1px solid var(--line); }
+.rail-logo img { height: 32px; display: block; }
+.labtabs.vertical { --x: 0; display: grid; gap: 2px; }
+.labtabs.vertical button { text-align: left; padding: 11px 12px; border: 0; border-radius: 8px; background: none; color: var(--steel); font: 600 17px var(--head); }
+.labtabs.vertical button:hover { background: rgba(79,216,255,.06); color: var(--ice); }
+.labtabs.vertical button[aria-selected=true] { color: var(--ice); }
+.labtabs.vertical .ind { position: absolute; left: 0; right: 0; top: calc(var(--x) * (100% / 3)); height: calc(100% / 3 - 2px); border-radius: 8px; background: rgba(79,216,255,.12); box-shadow: inset 3px 0 0 var(--ice-blue); z-index: 0; }
+.find span, .rail .scoring span { display: block; font: 600 13px var(--head); color: var(--steel); margin-bottom: 4px; }
+.rail .scoring { display: block; margin: 0; } .rail .scoring select { width: 100%; }
+.desk { padding: 20px 24px 40px; max-width: 1240px; }
+.c-strip { display: grid; grid-template-columns: repeat(7, 1fr); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin-bottom: 16px; }
+.c-strip button { display: grid; grid-template-columns: 1fr auto; grid-template-rows: auto auto; padding: 8px 12px; background: #0a1424; border: 0; text-align: left; color: var(--steel); }
+.c-strip button span { font: 700 15px var(--head); color: var(--ice); } .c-strip button small { font-size: 12px; }
+.c-strip button .led { grid-row: 1 / 3; grid-column: 2; font-size: 26px; color: var(--ice); align-self: center; }
+.c-strip button.light .led { color: var(--ice-blue); } .c-strip button.packed .led { color: var(--red); }
+.c-strip button[aria-pressed=true] { background: #13243b; box-shadow: inset 0 -3px 0 var(--amber); }
+.c-grid { display: grid; grid-template-columns: minmax(260px, 1fr) 2.2fr; gap: 16px; align-items: start; }
+.c-panel { background: #0a1424; border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; position: relative; overflow: hidden; margin-bottom: 16px; }
+.c-panel h2 { font-size: 18px; margin: 4px 0 10px; } .c-panel h2 small { font: 500 13px var(--body); color: var(--steel); margin-left: 6px; }
+table.ledger { font-size: 14px; } table.ledger td, table.ledger th { padding: 6px 8px; } table.ledger tr.grp td { border-top: 1px solid var(--edge); }
+.heat { display: inline-flex; gap: 2px; vertical-align: middle; } .heat i { width: 13px; height: 13px; border-radius: 3px; background: rgba(255,197,61, calc(.08 + var(--h) * .92)); }
+.c-kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 14px; }
+.c-kpis div { background: #0a1424; border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; } .c-kpis span { display: block; font-size: 13px; color: var(--steel); }
+.c-kpis .led { font-size: 26px; } .why-cell { font-size: 13px; color: var(--steel); max-width: 420px; }
+@media (max-width: 900px) { body { grid-template-columns: 1fr; } .rail { position: sticky; height: auto; flex-direction: row; flex-wrap: wrap; align-items: center; z-index: 20; }
+  .labtabs.vertical { grid-auto-flow: column; flex: 1; } .labtabs.vertical .ind { top: 0; height: 100%; width: calc(100% / 3); left: calc(var(--x) * 100% / 3); }
+  .find { display: none; } .c-grid, .c-kpis { grid-template-columns: 1fr 1fr; } .c-grid { grid-template-columns: 1fr; } .c-strip button { grid-template-columns: 1fr; } .c-strip button .led { grid-row: auto; grid-column: auto; } }
+</style><script src="app.js?v=lab" defer></script><script src="lab.js?v=lab" defer></script></head>
+<body data-page="lab" data-variant="c"><div id="app" style="display:contents"></div>
+<nav class="labswitch" aria-label="Design directions"><a href="lab-a.html">A Broadcast</a><a href="lab-b.html">B Rink</a><a href="lab-c.html" aria-current=page>C Analyst</a></nav><div class="vt-rider" aria-hidden="true"><svg viewBox="0 0 150 110"><line x1="-70" y1="-90" x2="86" y2="90" stroke="#9fb3c6" stroke-width="8" stroke-linecap="round"/><line x1="-70" y1="-90" x2="-40" y2="-55" stroke="#1c2b3d" stroke-width="9" stroke-linecap="round"/><path d="M80 86 L116 86 Q121 86 121 81 L121 79 Q110 82 84 80 Z" fill="#eaf4fb"/><path d="M92 81 L92 86 M100 81 L100 86 M108 81 L108 86" stroke="#4fd8ff" stroke-width="2"/><ellipse cx="136" cy="86" rx="15" ry="6.5" fill="#05080d" stroke="rgba(234,244,251,.55)" stroke-width="1.2"/><ellipse cx="136" cy="83.5" rx="15" ry="5.5" fill="#121a24"/></svg></div></body></html>
