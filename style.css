@@ -61,3 +61,9 @@ input.games { width: 72px; padding: 6px 8px; text-align: right; }
 .hero { padding: 34px 0 10px; }
 footer.site { margin: 50px 0 30px; color: var(--steel); font-size: 14px; border-top: 1px solid rgba(138, 157, 178, .2); padding-top: 18px; }
 @media (max-width: 640px) { nav a { margin: 0 14px 0 0; } header.site img { height: 38px; } }
+.social a { margin-right: 16px; font: 600 16px/1 var(--head); letter-spacing: .08em; text-transform: uppercase; text-decoration: none; }
+.social.big .btn { display: inline-block; margin: 6px 10px 6px 0; color: var(--ice); text-decoration: none; }
+.social.big .btn:hover { border-color: var(--ice-blue); color: var(--ice-blue); }
+.sheets { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
+.sheets img { width: 100%; height: auto; border-radius: 12px; border: 1px solid var(--edge); display: block; }
+.sheets figure { margin: 0; }
