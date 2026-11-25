@@ -27,7 +27,7 @@ const store = {
 };
 function league() {
   const L = store.get("league", { k: "espn" });
-  if (L.k === "custom" && L.custom) FORMATS.custom = { name: "Your league (custom points)", type: "points", sk: L.custom, g: FORMATS.espn.g };
+  if (L.k === "custom" && L.custom) FORMATS.custom = { name: L.customName || "Your league (custom points)", type: "points", sk: L.custom, g: L.customG || FORMATS.espn.g };
   if (!FORMATS[L.k]) L.k = "espn";
   return L;
 }
@@ -118,12 +118,125 @@ function waiverCut(k) {   // a skater below the 150th-best in this format is lik
   const v = DATA.skaters.filter(p => p.gp >= 5).map(p => perGame(p, FORMATS[k], k)).sort((a, b) => b - a);
   return (CUT[k] = v[Math.min(149, v.length - 1)]);
 }
+/* ---------- ESPN league sync: paste a public league link, or one click on ESPN for a private league ---------- */
+const ESPN_TEAM = { 1: "BOS", 2: "BUF", 3: "CGY", 4: "CHI", 5: "DET", 6: "EDM", 7: "CAR", 8: "LAK", 9: "DAL", 10: "MTL", 11: "NJD", 12: "NYI", 13: "NYR", 14: "OTT",
+  15: "PHI", 16: "PIT", 17: "COL", 18: "SJS", 19: "STL", 20: "TBL", 21: "TOR", 22: "VAN", 23: "WSH", 25: "ANA", 26: "FLA", 27: "NSH", 28: "WPG", 29: "CBJ", 30: "MIN",
+  37: "VGK", 124292: "SEA", 129764: "UTA" };
+const ESPN_SLOT = { 0: "C", 1: "LW", 2: "RW", 3: "F", 4: "D", 5: "G", 6: "UTIL" };   // 7 bench, 8 IR
+const ESPN_STAT = { 13: "G", 14: "A", 15: "PM", 38: "PPP", 39: "SHP", 29: "SOG", 31: "HIT", 32: "BLK", 1: "W", 4: "GA", 6: "SV", 7: "SO", 9: "OTL" };   // checked against an ESPN default league
+const G_STAT = new Set(["W", "GA", "SV", "SO", "OTL"]);
+const espnURL = (lid, season) => `https://lm-api-reads.fantasy.espn.com/apis/v3/games/fhl/seasons/${season}/segments/0/leagues/${lid}?view=mSettings&view=mTeam&view=mRoster&view=mMatchup&view=mStatus`;
+let LEAGUE = null, TAKEN = new Set(), ELIG = {}, LINEUP = {};
+const normName = s => s.normalize("NFKD").replace(/[^a-z0-9]/gi, "").toLowerCase();
+let NAMEIDX = null;
+function playerByName(name, pro, elig = "") {
+  if (!NAMEIDX) { NAMEIDX = new Map(); everyone().forEach(p => { const k = normName(p.n); NAMEIDX.set(k, (NAMEIDX.get(k) || []).concat(p)); }); }
+  // "Elias N. Pettersson": ESPN adds a middle initial to tell same-name players apart; the NHL doesn't
+  let hits = NAMEIDX.get(normName(name)) || NAMEIDX.get(normName(name.replace(/\s[A-Z]\.?(?=\s)/g, ""))) || [];
+  if (hits.length > 1) hits = hits.filter(p => p.t === ESPN_TEAM[pro]);
+  if (hits.length > 1 && elig) {   // same name, same team: ESPN's slots say goalie, defenseman or forward
+    const e = elig.split(".");
+    hits = hits.filter(p => e.includes("5") ? p.p === "G" : e.includes("4") && !e.includes("3") ? p.p === "D" : "CLR".includes(p.p));
+  }
+  return hits.length === 1 ? hits[0] : null;
+}
+// The same trim runs inside the bookmarklet (bookmarklet.js), so both paths hand the page one small snapshot.
+function espnTrim(j, lid, season, tid) {
+  const S = j.settings, cur = j.status.currentMatchupPeriod;
+  const m = j.schedule.find(x => x.matchupPeriodId === cur && x.home && x.away && (x.home.teamId === tid || x.away.teamId === tid));
+  const me = m && m.home.teamId === tid ? m.home : m && m.away, them = m && m.home.teamId === tid ? m.away : m && m.home;
+  return { v: 1, lid, season, tid, name: S.name, type: S.scoringSettings.scoringType, slots: S.rosterSettings.lineupSlotCounts,
+    score: S.scoringSettings.scoringItems.filter(i => i.points).map(i => [i.statId, i.points]),
+    acq: S.acquisitionSettings.matchupAcquisitionLimit, wday: (S.acquisitionSettings.waiverProcessDays || [])[0] || "",
+    opp: them ? them.teamId : null, pts: me ? [me.totalPoints || 0, them.totalPoints || 0] : null,
+    teams: j.teams.map(t => [t.id, t.name || t.abbrev, (t.roster ? t.roster.entries : []).map(e => { const p = e.playerPoolEntry.player;
+      return [p.fullName, p.proTeamId, e.lineupSlotId, p.eligibleSlots.filter(s => s < 7).join("."), p.injuryStatus && p.injuryStatus !== "ACTIVE" ? p.injuryStatus : ""]; })]),
+    at: Date.now() };
+}
+function applyLeague(snap) {
+  LEAGUE = snap; TAKEN = new Set(); ELIG = {}; LINEUP = {};
+  const rosterOf = tid => (snap.teams.find(t => t[0] === tid) || [0, "", []])[2];
+  snap.teams.forEach(t => t[2].forEach(([n, pro, , el]) => { const p = playerByName(n, pro, el); if (p) TAKEN.add(p.id); }));
+  const mine = [], missing = [];
+  rosterOf(snap.tid).forEach(([n, pro, slot, el, inj]) => {
+    const p = playerByName(n, pro, el);
+    if (!p) { missing.push(n); return; }
+    ELIG[p.id] = el.split(".").map(s => ESPN_SLOT[s]).filter(Boolean);
+    LINEUP[p.id] = slot;
+    if (slot !== 8) mine.push(p.id);   // injured reserve doesn't play
+  });
+  LEAGUE.missing = missing;
+  LEAGUE.oppIds = snap.opp == null ? [] : rosterOf(snap.opp).filter(e => e[2] !== 8).map(([n, pro, , el]) => playerByName(n, pro, el)).filter(Boolean).map(p => p.id);
+  LEAGUE.oppName = snap.opp == null ? "" : (snap.teams.find(t => t[0] === snap.opp) || [0, "your opponent"])[1];
+  LEAGUE.myName = (snap.teams.find(t => t[0] === snap.tid) || [0, ""])[1];
+  store.set("team", mine);
+  const slots = {};
+  Object.entries(snap.slots).forEach(([id, c]) => { if (ESPN_SLOT[id] && c) slots[ESPN_SLOT[id]] = c; });
+  store.set("slotsLeague", slots); store.set("slots", "league");
+  if (/POINTS/.test(snap.type) || snap.score.length) {
+    const sk = {}, g = {}, unknown = [];
+    snap.score.forEach(([id, w]) => { const k = ESPN_STAT[id]; if (!k) unknown.push(id); else (G_STAT.has(k) ? g : sk)[k] = w; });
+    LEAGUE.unknown = unknown;
+    if (/POINTS/.test(snap.type)) store.set("league", { k: "custom", custom: sk, customG: g, customName: "Your ESPN league" });
+  }
+}
+async function fetchLeague(lid, season, tid) {
+  const r = await fetch(espnURL(lid, season));
+  if (r.status === 401 || r.status === 403) throw new Error("private");
+  if (!r.ok) throw new Error("status " + r.status);
+  const j = await r.json();
+  return { j, snap: tid ? espnTrim(j, lid, season, tid) : null };
+}
+async function loadLeague() {   // every visit: public leagues refresh from ESPN; private ones use the last one-click sync
+  const hash = location.hash;
+  if (hash.startsWith("#espn=")) {
+    try { const snap = JSON.parse(decodeURIComponent(hash.slice(6))); store.set("espn", { lid: snap.lid, season: snap.season, tid: snap.tid, private: true, snap }); }
+    catch { store.set("espnError", "That sync link was cut off. Click the bookmark on ESPN again."); }
+    history.replaceState(null, "", location.pathname + location.search);
+  } else if (hash.startsWith("#espn-error")) {
+    store.set("espnError", "Open your team page on ESPN Fantasy Hockey first, then click the bookmark.");
+    history.replaceState(null, "", location.pathname + location.search);
+  }
+  const E = store.get("espn", null);
+  if (!E) return null;
+  if (E.private && E.snap) { applyLeague(E.snap); return LEAGUE; }
+  try { const { snap } = await fetchLeague(E.lid, E.season, E.tid); applyLeague(snap); return LEAGUE; }
+  catch (err) { store.set("espnError", err.message === "private" ? "ESPN says this league is private now. Use the one-click sync below." : "Couldn't reach ESPN just now. Showing your saved roster."); return null; }
+}
+const isFree = (p, k, cut) => LEAGUE ? !TAKEN.has(p.id) : perGame(p, FORMATS[k], k) < cut;
+function bookmarkletHref() {
+  const src = `(async()=>{const q=new URLSearchParams(location.search),lid=q.get("leagueId"),season=q.get("seasonId")||"${SEASON_ESPN}",home="${location.origin}${location.pathname.replace(/[^/]*$/, "")}team.html";`
+    + `if(!/espn\\.com$/.test(location.hostname)||!lid){location.href=home+"#espn-error=open-league";return}`
+    + `const j=await fetch("https://lm-api-reads.fantasy.espn.com/apis/v3/games/fhl/seasons/"+season+"/segments/0/leagues/"+lid+"?view=mSettings&view=mTeam&view=mRoster&view=mMatchup&view=mStatus",{credentials:"include"}).then(r=>r.json());`
+    + `const sw=decodeURIComponent((document.cookie.match(/SWID=([^;]+)/)||[])[1]||"");const tid=+q.get("teamId")||(j.teams.find(t=>(t.owners||[]).includes(sw))||{}).id;`
+    + `const espnTrim=${espnTrim.toString()};location.href=home+"#espn="+encodeURIComponent(JSON.stringify(espnTrim(j,lid,season,tid)))})()`;
+  return "javascript:" + encodeURIComponent(src);
+}
+const SEASON_ESPN = "2027";   // ESPN names a season by the year it ends
+function parseLeagueLink(text) {
+  try { const u = new URL(text.trim().startsWith("http") ? text.trim() : "https://" + text.trim()); const lid = u.searchParams.get("leagueId");
+    return lid ? { lid, season: u.searchParams.get("seasonId") || SEASON_ESPN, tid: +u.searchParams.get("teamId") || null } : null; }
+  catch { return null; }
+}
+function lineupFix(Z, d, mine, f, k) {   // ESPN's saved lineup against the best one, for players who play that night
+  if (!LEAGUE) return null;
+  const rows = mine.filter(p => Z.plays.has(p.t + d)).map(p => ({ p, v: perGame(p, f, k) }));
+  const { used } = nightLineup(rows, slotSet());
+  const benchIn = rows.filter(r => used.has(r.p.id) && LINEUP[r.p.id] === 7).sort((a, b) => b.v - a.v);
+  const startOut = rows.filter(r => !used.has(r.p.id) && LINEUP[r.p.id] !== 7 && LINEUP[r.p.id] !== 8).sort((a, b) => a.v - b.v);
+  const n = Math.min(benchIn.length, startOut.length);
+  if (!n) return null;
+  const ins = benchIn.slice(0, n), outs = startOut.slice(0, n);
+  return { ins, outs, gain: ins.reduce((a, r) => a + r.v * startShare(r.p), 0) - outs.reduce((a, r) => a + r.v * startShare(r.p), 0) };
+}
+
 /* ---------- shared: the header scoring picker and the night board ---------- */
 const LEAGUE_CBS = [];
 const onLeague = fn => LEAGUE_CBS.push(fn);
 function initScoring() {   // one picker in the header; every tool on the page re-scores when it changes
   const sel = $("#fmt");
   if (!sel) return;
+  league();   // registers your league's own scoring first, so it shows in the list
   sel.innerHTML = Object.keys(FORMATS).map(k => `<option value="${k}">${esc(FORMATS[k].name.split(" (")[0])}</option>`).join("");
   sel.value = league().k;
   sel.addEventListener("change", () => { store.set("league", { ...league(), k: sel.value }); LEAGUE_CBS.forEach(fn => fn()); });
@@ -146,8 +259,8 @@ const who = p => `${esc(p.n)}<span class="meta">${esc(p.t)} ${POS[p.p]}</span>`;
 function myRoster() { const byId = new Map(everyone().map(p => [p.id, p])); return store.get("team", []).map(id => byId.get(id)).filter(Boolean); }
 function nightStreamers(Z, d, k, n, fitsOpen) {
   const f = FORMATS[k], teams = new Set(teamsOn(Z, d)), cut = waiverCut(k), have = new Set(store.get("team", []));
-  return DATA.skaters.filter(p => teams.has(p.t) && !have.has(p.id) && p.gp >= 5 && p.rgp >= 3 && (!fitsOpen || fitsOpen(p)))
-    .map(p => ({ p, v: perGame(p, f, k), r: recentRate(p, f) })).filter(x => x.v < cut)
+  return DATA.skaters.filter(p => teams.has(p.t) && !have.has(p.id) && p.gp >= 5 && p.rgp >= 3 && (!fitsOpen || fitsOpen(p)) && isFree(p, k, cut))
+    .map(p => ({ p, v: perGame(p, f, k), r: recentRate(p, f) }))
     .sort((a, b) => (b.r ?? b.v) + b.v - ((a.r ?? a.v) + a.v)).slice(0, n);   // rank by blended rate plus recent form, so hot players rise
 }
 function nightGoalies(Z, d, k, n) {
@@ -169,12 +282,13 @@ const SLOTS = {
   yahoo: { name: "Yahoo default (2C 2LW 2RW 4D 2G)", s: { C: 2, LW: 2, RW: 2, D: 4, G: 2 } },
   fdg: { name: "Forwards / D / G (6F 4D 2G)", s: { F: 6, D: 4, G: 2 } },
   custom: { name: "Custom spots", s: null },
+  league: { name: "Your ESPN league's spots", s: null },
 };
 const SLOT_KEYS = ["C", "LW", "RW", "F", "D", "UTIL", "G"];
-function slotKey() { const k = store.get("slots", "espn"); return SLOTS[k] ? k : "espn"; }
-function slotSet() { const k = slotKey(); return k === "custom" ? store.get("slotsCustom", { F: 9, D: 5, UTIL: 1, G: 2 }) : SLOTS[k].s; }
+function slotKey() { const k = store.get("slots", "espn"); return SLOTS[k] && (k !== "league" || store.get("slotsLeague", null)) ? k : "espn"; }
+function slotSet() { const k = slotKey(); return k === "custom" ? store.get("slotsCustom", { F: 9, D: 5, UTIL: 1, G: 2 }) : k === "league" ? store.get("slotsLeague") : SLOTS[k].s; }
 const POS = { C: "C", L: "LW", R: "RW", D: "D", G: "G" };
-const fits = (p, slot) => slot === POS[p.p] || (slot === "F" && "CLR".includes(p.p)) || (slot === "UTIL" && p.p !== "G");
+const fits = (p, slot) => ELIG[p.id] ? ELIG[p.id].includes(slot) : slot === POS[p.p] || (slot === "F" && "CLR".includes(p.p)) || (slot === "UTIL" && p.p !== "G");
 const startShare = p => isG(p) ? Math.min(1, p.gs / Math.max(DATA.teams[p.t].played, 1)) : 1;   // a goalie only counts when he starts
 function nightLineup(playing, slots) {
   // Positions come from the NHL (one each), so filling each position's own slots by value, then UTIL with the best leftover, is the best lineup.
@@ -203,7 +317,7 @@ function usableWeek(Z, mine, from, to, slots, f, key) {
 const openSkaters = left => Object.entries(left).filter(([s]) => s !== "G").reduce((a, [, k]) => a + k, 0);
 function bestAdds(Z, wk, mine, f, key) {
   const cut = waiverCut(key), have = new Set(mine.map(p => p.id));
-  return DATA.skaters.filter(p => !have.has(p.id) && p.gp >= 5 && p.rgp >= 3).map(p => ({ p, v: perGame(p, f, key) })).filter(x => x.v < cut)
+  return DATA.skaters.filter(p => !have.has(p.id) && p.gp >= 5 && p.rgp >= 3 && isFree(p, key, cut)).map(p => ({ p, v: perGame(p, f, key) }))
     .map(x => ({ ...x, add: wk.nights.filter(nt => nt.n && Z.plays.has(x.p.t + nt.d) && Object.keys(nt.left).some(s => nt.left[s] > 0 && fits(x.p, s))).length }))
     .filter(x => x.add).map(x => ({ ...x, total: x.add * x.v })).sort((a, b) => b.total - a.total).slice(0, 8);
 }
@@ -216,6 +330,7 @@ async function home() {
   const [players, standings, S] = await Promise.all([load("players"), load("standings"), load("schedule")]);
   DATA = players;
   const Z = seasonIndex(S), today = todayISO();
+  await loadLeague();
   initScoring();
   let wk = 0, show = "sk", lim = 8, sel = today;
   const days = () => { const m = addDays(mondayOf(today), 7 * wk); return Array.from({ length: 7 }, (_, i) => addDays(m, i)); };
@@ -242,16 +357,26 @@ async function home() {
     const pts = f.type === "points";
     $("#np-list").innerHTML = `<div class="scroll"><table><thead><tr><th>Player</th><th class="num">Games</th>${pts ? '<th class="num">Last 14 days</th>' : ""}<th class="num">Per game</th></tr></thead><tbody>${
       st.map(x => { const g = weekGamesOf(x.p.t), r = recentRate(x.p, f); return `<tr><td>${who(x.p)}</td><td class="num">${g}${g >= 4 ? ' <span class="pill">4G</span>' : ""}</td>${pts ? `<td class="num">${r === null ? "" : fmt(r, 2)}</td>` : ""}<td class="num led">${fmt(x.v, 2)}</td></tr>`; }).join("")}</tbody></table></div>
-      <p class="note">Likely on waivers in ${esc(f.name)} (outside the top 150 in this scoring). Last 14 days blended with the season.</p>`;
+      <p class="note">${LEAGUE ? `Free agents in ${esc(LEAGUE.name)}, ${esc(f.name)} scoring.` : `Likely on waivers in ${esc(f.name)} (outside the top 150 in this scoring).`} Last 14 days blended with the season.</p>`;
   };
   const drawSnap = () => {
     const mine = myRoster();
-    if (!mine.length) { $("#snap-body").innerHTML = `<div class="empty"><p class="big-line">How many of your players' games can you use?</p><p class="note">Add your roster once. You'll see your open lineup spots every night and the best adds to fill them.</p><a class="btn primary" href="team.html">Set up My team</a></div>`; return; }
+    if (!mine.length) {
+      $("#snap-body").innerHTML = `<div class="empty"><p class="big-line">How many of your players' games can you use?</p>
+        <label for="snap-league">Paste your ESPN league link</label><form class="inline" id="snap-form"><input id="snap-league" placeholder="fantasy.espn.com/hockey/team?leagueId=..." autocomplete="off"><button class="btn primary" type="submit">Connect</button></form>
+        <p class="note">Or <a href="team.html">add players by hand on My team</a>.</p></div>`;
+      $("#snap-form").addEventListener("submit", e => { e.preventDefault(); const L = parseLeagueLink($("#snap-league").value);
+        if (!L) { $("#snap-league").setCustomValidity("Paste the link from your ESPN team page. It has leagueId in it."); $("#snap-league").reportValidity(); return; }
+        store.set("espn", { lid: L.lid, season: L.season, tid: L.tid }); location.href = "team.html"; });
+      return;
+    }
     const k = league().k, f = FORMATS[k], ds = days(), from = ds.includes(today) ? today : ds[0];
     const W = usableWeek(Z, mine, from, ds[6], slotSet(), f, k), tot = weekTotals(W);
     const empty = W.nights.filter(nt => nt.n).reduce((a, nt) => a + openSkaters(nt.left), 0), top = bestAdds(Z, W, mine, f, k)[0];
     const on = mine.filter(p => Z.plays.has(p.t + sel)).length;
-    $("#snap-body").innerHTML = `<p class="big-line"><span class="led">${fmt(tot.u, 0)}</span> of ${fmt(tot.g, 0)} games usable</p>
+    const fix = sel === today ? lineupFix(Z, today, mine, f, k) : null;
+    $("#snap-body").innerHTML = (fix ? `<p class="alert">Lineup fix tonight: start ${fix.ins.map(r => esc(r.p.n)).join(", ")} over ${fix.outs.map(r => esc(r.p.n)).join(", ")} (about +${fmt(fix.gain, 1)}).</p>` : "")
+      + `<p class="big-line"><span class="led">${fmt(tot.u, 0)}</span> of ${fmt(tot.g, 0)} games usable</p>
       <p class="note">${wk ? "Next week" : from === today ? "Rest of this week" : "This week"}, with ${empty} empty skater spot-nights.</p>
       <p>${sel === today ? "Tonight" : dayName(sel)}: ${on} of your ${mine.length} players play.</p>
       ${top ? `<p>Best add: <strong>${esc(top.p.n)}</strong><span class="meta">${esc(top.p.t)} ${POS[top.p.p]}</span>, ${top.add} usable game${top.add > 1 ? "s" : ""}, about ${fmt(top.total, 1)} points.</p>` : ""}`;
@@ -276,16 +401,59 @@ async function home() {
   $("#updated").textContent = players.updated;
 }
 
+function renderConnect(Z) {
+  const el = $("#connect"), E = store.get("espn", null), err = store.get("espnError", "");
+  store.set("espnError", "");
+  if (LEAGUE) {
+    const ago = Math.round((Date.now() - LEAGUE.at) / 60000);
+    el.innerHTML = `<h3>${esc(LEAGUE.name)}</h3><p class="note">Connected as <strong>${esc(LEAGUE.myName)}</strong>. ${E && E.private ? `Synced ${ago < 60 ? ago + " min" : Math.round(ago / 60) + " h"} ago; click the bookmark on ESPN to refresh.` : "Public league: refreshed from ESPN every visit."}
+      Your roster, scoring, lineup spots and the league's free agents are loaded.${LEAGUE.missing.length ? ` Not matched: ${LEAGUE.missing.map(esc).join(", ")}.` : ""}${LEAGUE.unknown && LEAGUE.unknown.length ? " Your league scores a few stats we don't track yet (like faceoffs), so values leave those out." : ""}</p>
+      <button class="btn" type="button" id="espn-off">Disconnect</button>`;
+    $("#espn-off").addEventListener("click", () => { ["espn", "slotsLeague", "team"].forEach(k => store.set(k, k === "team" ? [] : null)); store.set("slots", "espn"); store.set("league", { k: "espn" }); location.reload(); });
+    return;
+  }
+  el.innerHTML = `<h3>Connect your ESPN league</h3><p class="note">Paste the link to your team page on ESPN. We load your roster, your league's scoring and lineup spots, and who is actually free in your league.</p>
+    ${err ? `<p class="alert">${esc(err)}</p>` : ""}
+    <form class="inline" id="espn-form"><input id="espn-url" placeholder="fantasy.espn.com/hockey/team?leagueId=..." autocomplete="off" aria-label="ESPN league link"><button class="btn primary" type="submit">Connect</button></form>
+    <div id="espn-pick"></div>
+    <details class="private"><summary>Private league?</summary><p class="note">ESPN only shares a private league with its members, so it has to come from your browser. On a computer:</p>
+    <ol class="note"><li>Drag this button to your bookmarks bar: <a class="btn bm" id="bm">Sync to Off-Night</a></li><li>Open your team page on ESPN Fantasy Hockey.</li><li>Click the bookmark. You'll land back here with everything loaded.</li></ol>
+    <p class="note">Nothing goes to our server: the league data rides in the link to this page and stays in your browser. On a phone, the simplest route is making the league viewable to the public in ESPN's league settings.</p></details>`;
+  $("#bm").setAttribute("href", bookmarkletHref());
+  $("#bm").addEventListener("click", e => { e.preventDefault(); $("#bm").textContent = "Drag me to your bookmarks bar"; });
+  $("#espn-form").addEventListener("submit", async e => {
+    e.preventDefault();
+    const L = parseLeagueLink($("#espn-url").value);
+    if (!L) { $("#espn-pick").innerHTML = `<p class="alert">That link has no leagueId in it. Open your team page on ESPN and copy the address.</p>`; return; }
+    $("#espn-pick").innerHTML = `<p class="note">Reading your league...</p>`;
+    try {
+      const { j } = await fetchLeague(L.lid, L.season, null);
+      const done = tid => { store.set("espn", { lid: L.lid, season: L.season, tid }); location.reload(); };
+      if (L.tid && j.teams.some(t => t.id === L.tid)) return done(L.tid);
+      $("#espn-pick").innerHTML = `<label for="espn-team">Which team is yours?</label><select id="espn-team">${j.teams.map(t => `<option value="${t.id}">${esc(t.name || t.abbrev)}</option>`).join("")}</select>
+        <button class="btn primary" type="button" id="espn-go">Use this team</button>`;
+      $("#espn-go").addEventListener("click", () => done(+$("#espn-team").value));
+    } catch (err) {
+      $("#espn-pick").innerHTML = err.message === "private"
+        ? `<p class="alert">This league is private. Use the one-click sync below.</p>` : `<p class="alert">Couldn't reach ESPN (${esc(err.message)}). Try again in a minute.</p>`;
+      if (err.message === "private") el.querySelector("details.private").open = true;
+    }
+  });
+}
+
 /* ---------- My team: usable games, open spots by night, who fills them ---------- */
 async function teamPage() {
   const [players, S] = await Promise.all([load("players"), load("schedule")]);
   DATA = players;
   const Z = seasonIndex(S), today = todayISO();
+  await loadLeague();
   initScoring();
+  renderConnect(Z);
   let span = store.get("myweek", "rest") === "next" ? "next" : "rest", sel = null;
   document.querySelectorAll(".pagehead .seg button").forEach(b => b.setAttribute("aria-pressed", b.dataset.wk === span));
   const slotSel = $("#slots");
-  slotSel.innerHTML = Object.entries(SLOTS).map(([k, x]) => `<option value="${k}">${x.name}</option>`).join("");
+  slotSel.innerHTML = Object.entries(SLOTS).filter(([k]) => k !== "league" || store.get("slotsLeague", null))
+    .map(([k, x]) => `<option value="${k}">${k === "league" ? esc(x.name) + " (" + Object.entries(store.get("slotsLeague")).map(([s, c]) => c + s).join(" ") + ")" : x.name}</option>`).join("");
   slotSel.value = slotKey();
   const drawSlotEdit = () => {
     const on = slotSel.value === "custom", c = slotSet();
@@ -312,7 +480,17 @@ async function teamPage() {
     $("#night-detail").hidden = $("#adds").hidden = false;
     const tot = weekTotals(W), empty = withGames.reduce((a, nt) => a + openSkaters(nt.left), 0);
     const worst = withGames.slice().sort((a, b) => openSkaters(b.left) - openSkaters(a.left))[0];
-    $("#summary").innerHTML = `<p class="big-line">You can use <span class="led">${fmt(tot.u, 0)}</span> of your players' ${fmt(tot.g, 0)} games</p>
+    let matchup = "", fixHTML = "";
+    if (LEAGUE && span === "rest" && LEAGUE.pts) {
+      const byId = new Map(everyone().map(p => [p.id, p])), opp = LEAGUE.oppIds.map(id => byId.get(id)).filter(Boolean);
+      const proj = Wx => Wx.rows.reduce((a, r) => a + r.used * r.v, 0), OW = usableWeek(Z, opp, from, to, slots, f, k);
+      const [a, b] = LEAGUE.pts, ma = a + proj(W), mb = b + proj(OW);
+      matchup = `<p class="matchup"><span>This week vs ${esc(LEAGUE.oppName)}</span><b class="led">${fmt(a, 1)}</b> to <b class="led">${fmt(b, 1)}</b> now.
+        Projected final <b>${fmt(ma, 0)}</b> to <b>${fmt(mb, 0)}</b>${Math.abs(ma - mb) < 8 ? ", close enough that one add or lineup call matters." : ma > mb ? ", you're ahead." : ", you're behind: use your open spots."}</p>`;
+    }
+    const fx = span === "rest" ? lineupFix(Z, today, mine, f, k) : null;
+    if (fx) fixHTML = `<p class="alert">Lineup fix tonight: start ${fx.ins.map(r => esc(r.p.n)).join(", ")} over ${fx.outs.map(r => esc(r.p.n)).join(", ")}. About +${fmt(fx.gain, 1)} points. (Your ESPN lineup as of the last sync.)</p>`;
+    $("#summary").innerHTML = fixHTML + matchup + `<p class="big-line">You can use <span class="led">${fmt(tot.u, 0)}</span> of your players' ${fmt(tot.g, 0)} games</p>
       <p class="note">${dayDate(from)} to ${dayDate(to)}. ${tot.g - tot.u >= 0.5 ? `${fmt(tot.g - tot.u, 0)} sit on your bench on crowded nights. ` : ""}${empty ? `${empty} skater spot-nights stay empty${worst && openSkaters(worst.left) ? `, most on ${dayName(worst.d)} (${openSkaters(worst.left)})` : ""}. Empty spots score zero.` : "Every spot is filled every night."}</p>`;
     const nt = W.nights.find(x => x.d === sel), bySlot = {};
     nt.used.forEach((slot, id) => (bySlot[slot] = bySlot[slot] || []).push(nt.playing.find(r => r.p.id === id)));
@@ -325,7 +503,8 @@ async function teamPage() {
       <h3 style="margin-top:14px">Open spots</h3><p>${open.length ? open.map(([s, c]) => `${c} ${s}`).join(", ") : "None"}</p></div>
       <div><h3>Fill an open spot</h3><ul>${fill.map(x => `<li>${who(x.p)} <span class="led">${fmt(x.v, 2)}</span></li>`).join("") || "<li class='muted'>No open skater spots</li>"}</ul></div></div>`}`;
     const adds = bestAdds(Z, W, mine, f, k);
-    $("#adds").innerHTML = `<div class="panel-head"><h2>Best adds for your open spots</h2></div><p class="note">Likely on waivers in ${esc(f.name)}. Usable games = his team's games on nights you have an open spot he fits.</p>
+    const limit = LEAGUE ? (LEAGUE.acq > 0 ? ` Your league allows ${LEAGUE.acq} add${LEAGUE.acq > 1 ? "s" : ""} per matchup${LEAGUE.wday ? `, and waivers run ${LEAGUE.wday.charAt(0) + LEAGUE.wday.slice(1).toLowerCase()}` : ""}, so pick the one that covers the most open nights.` : "") : "";
+    $("#adds").innerHTML = `<div class="panel-head"><h2>Best adds for your open spots</h2></div><p class="note">${LEAGUE ? `Free agents in ${esc(LEAGUE.name)}.` : `Likely on waivers in ${esc(f.name)}.`} Usable games = his team's games on nights you have an open spot he fits.${limit}</p>
       <div class="scroll"><table><thead><tr><th>Player</th><th class="num">Usable games</th><th class="num">Per game</th><th class="num">Adds you</th></tr></thead><tbody>${
       adds.map(x => `<tr><td>${who(x.p)}</td><td class="num">${x.add}</td><td class="num">${fmt(x.v, 2)}</td><td class="num led">${fmt(x.total, 1)}</td></tr>`).join("") || `<tr><td colspan="4" class="muted">No open spots to fill this week.</td></tr>`}</tbody></table></div>`;
     $("#mine").innerHTML = `<div class="scroll"><table><thead><tr><th>Player</th><th class="num">Games</th><th class="num">Usable</th><th class="num">Benched</th><th class="num">Light nights</th><th class="num">Per game</th></tr></thead><tbody>${
@@ -555,8 +734,64 @@ async function schedulePlanner() {
   $("#updated").textContent = players.updated;
 }
 
+/* ---------- page transition: a stick pushes a puck across, pulling a sheet of fresh ice over the old page, then off the new one ---------- */
+const NAV_ORDER = ["index.html", "team.html", "schedule.html", "waiver-wire.html", "trade.html"];
+const NAV_HOME = { "nhl-trade.html": "trade.html", "fantasy.html": "waiver-wire.html", "nhl-4-game-teams-this-week.html": "schedule.html" };
+const pageSlot = path => { const f = path.split("/").pop() || "index.html"; return NAV_ORDER.indexOf(NAV_HOME[f] || f); };
+const calm = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+const RIDER = `<svg viewBox="0 0 150 110" aria-hidden="true">
+  <line x1="-70" y1="-90" x2="86" y2="90" stroke="#9fb3c6" stroke-width="8" stroke-linecap="round"/>
+  <line x1="-70" y1="-90" x2="-40" y2="-55" stroke="#1c2b3d" stroke-width="9" stroke-linecap="round"/>
+  <path d="M80 86 L116 86 Q121 86 121 81 L121 79 Q110 82 84 80 Z" fill="#eaf4fb"/>
+  <path d="M92 81 L92 86 M100 81 L100 86 M108 81 L108 86" stroke="#4fd8ff" stroke-width="2"/>
+  <ellipse cx="136" cy="86" rx="15" ry="6.5" fill="#05080d" stroke="rgba(234,244,251,.55)" stroke-width="1.2"/>
+  <ellipse cx="136" cy="83.5" rx="15" ry="5.5" fill="#121a24"/></svg>`;
+function rinkWipe(dir) {
+  const w = document.createElement("div");
+  w.className = "rinkwipe" + (dir < 0 ? " rev" : "");
+  w.setAttribute("aria-hidden", "true");
+  w.innerHTML = `<div class="sheet"></div><div class="rider"><span class="spray"></span>${RIDER}</div>`;
+  document.body.append(w);
+  return { w, sheet: w.querySelector(".sheet"), rider: w.querySelector(".rider") };
+}
+const RIDE = { duration: 360, easing: "cubic-bezier(.62,.02,.35,1)", fill: "forwards" };
+function wipeOut(href, dir) {
+  const { sheet, rider } = rinkWipe(dir);
+  sheet.animate([{ clipPath: "inset(0 100% 0 0)" }, { clipPath: "inset(0 0% 0 0)" }], RIDE);
+  rider.animate([{ transform: "translateX(0)" }, { transform: "translateX(100vw)" }], RIDE);
+  try { sessionStorage.setItem("onh.wipe", String(dir)); } catch { /* storage blocked: the next page simply appears */ }
+  setTimeout(() => { location.href = href; }, RIDE.duration - 30);
+}
+function wipeIn() {
+  let dir = null;
+  try { dir = sessionStorage.getItem("onh.wipe"); sessionStorage.removeItem("onh.wipe"); } catch { /* no storage, no wipe */ }
+  if (dir === null || calm()) { document.documentElement.classList.remove("wiping"); return; }
+  const { w, sheet, rider } = rinkWipe(+dir);
+  document.documentElement.classList.remove("wiping");
+  const T = { ...RIDE, duration: 460, easing: "cubic-bezier(.2,.6,.3,1)" };
+  sheet.animate([{ clipPath: "inset(0 0 0 0%)" }, { clipPath: "inset(0 0 0 100%)" }], T);
+  rider.animate([{ transform: "translateX(0)" }, { transform: "translateX(100vw)" }], T).onfinish = () => w.remove();
+}
+function initWipe() {
+  wipeIn();
+  addEventListener("pageshow", e => { if (e.persisted) { document.querySelectorAll(".rinkwipe").forEach(x => x.remove()); document.documentElement.classList.remove("wiping"); } });
+  const warmed = new Set();
+  const warm = a => { if (warmed.has(a.href)) return; warmed.add(a.href); const l = document.createElement("link"); l.rel = "prefetch"; l.href = a.href; document.head.append(l); };
+  document.addEventListener("pointerover", e => { const a = e.target.closest && e.target.closest("nav a"); if (a) warm(a); });
+  document.addEventListener("click", e => {
+    const a = e.target.closest && e.target.closest("a[href]");
+    if (!a || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || a.target || a.hasAttribute("download") || calm()) return;
+    const u = new URL(a.href, location.href);
+    if (u.origin !== location.origin || !/(\.html|\/)$/.test(u.pathname) || (u.pathname === location.pathname && u.search === location.search)) return;
+    e.preventDefault();
+    const from = pageSlot(location.pathname), to = pageSlot(u.pathname);
+    wipeOut(u.href, from >= 0 && to >= 0 && to < from ? -1 : 1);
+  });
+}
+
 const PAGES = { home, team: teamPage, hub, "fantasy-trade": fantasyTrade, "nhl-trade": nhlTrade, schedule: schedulePlanner };
 document.addEventListener("DOMContentLoaded", () => {
+  initWipe();
   const fn = PAGES[document.body.dataset.page];
   if (fn) fn().catch(err => { const m = document.querySelector("main"); m.insertAdjacentHTML("afterbegin", `<p class="panel red">Couldn't load the data (${esc(err.message)}). Try reloading.</p>`); });
 });
