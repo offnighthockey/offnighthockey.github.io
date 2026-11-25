@@ -20,6 +20,19 @@ const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;"
 const fmt = (x, d = 1) => (Math.round(x * 10 ** d) / 10 ** d).toFixed(d);
 async function load(name) { const r = await fetch(`data/${name}.json`); if (!r.ok) throw new Error(name); return r.json(); }
 
+/* ---------- saved in this browser only (league and team); private windows may block storage, so every call is guarded ---------- */
+const store = {
+  get(k, d) { try { const v = localStorage.getItem("onh." + k); return v ? JSON.parse(v) : d; } catch { return d; } },
+  set(k, v) { try { localStorage.setItem("onh." + k, JSON.stringify(v)); } catch { /* storage blocked: the page still works, it just won't remember */ } },
+};
+function league() {
+  const L = store.get("league", { k: "espn" });
+  if (L.k === "custom" && L.custom) FORMATS.custom = { name: "Your league (custom points)", type: "points", sk: L.custom, g: FORMATS.espn.g };
+  if (!FORMATS[L.k]) L.k = "espn";
+  return L;
+}
+const todayISO = () => new Date().toLocaleDateString("en-CA");   // YYYY-MM-DD in the visitor's own time zone
+
 /* ---------- rates and values ---------- */
 function blend(p, k, denomKey) {
   const s = p.s[k] / Math.max(p[denomKey], 1);
@@ -97,21 +110,65 @@ function leadersTable(fkey, limit = 12, waiverOnly = true) {
     list.map((x, i) => `<tr><td class="muted">${i + 1}</td><td>${esc(x.p.n)} <span class="muted small">${x.p.p}</span></td><td>${esc(x.p.t)}${gamesPill(x.p.t, window.WEEK)}</td><td class="num">${x.p.gp}</td><td class="num led">${fmt(x.v, 2)}</td></tr>`).join("")
   }</tbody></table></div>`;
 }
-function tabs(el, onPick, keys = Object.keys(FORMATS), start = "espn") {
+function tabs(el, onPick) {
+  const L = league(), keys = Object.keys(FORMATS), start = L.k;
   el.innerHTML = keys.map(k => `<button type="button" data-k="${k}" aria-pressed="${k === start}">${FORMATS[k].name.split(" (")[0]}</button>`).join("");
   el.addEventListener("click", e => { const b = e.target.closest("button"); if (!b) return;
-    el.querySelectorAll("button").forEach(x => x.setAttribute("aria-pressed", x === b)); onPick(b.dataset.k); });
+    el.querySelectorAll("button").forEach(x => x.setAttribute("aria-pressed", x === b));
+    store.set("league", { ...league(), k: b.dataset.k });   // the format you pick is remembered on every page
+    onPick(b.dataset.k); });
   onPick(start);
+}
+
+/* ---------- this week, tonight, and the visitor's own team ---------- */
+function weekGames(team, week) {
+  const n = new Map(week.per_day);
+  return week.plays.filter(([t]) => t === team).map(([, d]) => ({ d, light: n.get(d) <= 7 }));
+}
+let CUT = {};
+function waiverCut(k) {   // a skater below the 150th-best in this format is likely on waivers
+  if (CUT[k] !== undefined) return CUT[k];
+  const v = DATA.skaters.filter(p => p.gp >= 5).map(p => perGame(p, FORMATS[k], k)).sort((a, b) => b - a);
+  return (CUT[k] = v[Math.min(149, v.length - 1)]);
+}
+function tonightPanel(T) {
+  const today = todayISO(), L = league(), f = FORMATS[L.k];
+  if (T.date !== today || !T.games) { $("#tonight-title").textContent = "Tonight"; $("#tonight").innerHTML = `<p class="muted">${T.date === today ? "No NHL games tonight." : "Tonight's slate updates every morning in season."}</p>`; return; }
+  const teams = T.teams, entry = [today, T.games];
+  $("#tonight-date").textContent = new Date(today + "T12:00").toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
+  $("#tonight-title").textContent = entry[1] <= 7 ? `Light night: only ${entry[1]} games` : `${entry[1]} games tonight`;
+  const cut = waiverCut(L.k);
+  const streams = DATA.skaters.filter(p => teams.includes(p.t) && p.gp >= 5 && p.rgp >= 3).map(p => ({ p, v: perGame(p, f, L.k) }))
+    .filter(x => x.v < cut).sort((a, b) => b.v - a.v).slice(0, 6);
+  const mine = store.get("team", []), mineTonight = everyone().filter(p => mine.includes(p.id) && teams.includes(p.t));
+  $("#tonight").innerHTML = `<p class="small muted">Playing: ${teams.map(esc).join(", ")}</p>`
+    + (mine.length ? `<p><strong>Your players tonight:</strong> ${mineTonight.map(p => esc(p.n)).join(", ") || "none"}</p>` : "")
+    + `<h3>Streamers playing tonight</h3><p class="small muted">${esc(f.name)}, likely on waivers, recent form blended with season.</p><div class="scroll"><table><thead><tr><th>Player</th><th>Team</th><th class="num">Per game</th></tr></thead><tbody>${
+      streams.map(x => `<tr><td>${esc(x.p.n)} <span class="muted small">${x.p.p}</span></td><td>${esc(x.p.t)}</td><td class="num led">${fmt(x.v, 2)}</td></tr>`).join("")}</tbody></table></div>`;
+}
+function myTeamPanel(week, T) {
+  const ids = store.get("team", []), L = league(), f = FORMATS[L.k], tonight = T.date === todayISO() ? T.teams : [];
+  const byId = new Map(everyone().map(p => [p.id, p]));
+  const mine = ids.map(id => byId.get(id)).filter(Boolean);
+  $("#mine").innerHTML = !mine.length ? `<p class="muted">No players yet. Add your roster and this panel shows your week.</p>`
+    : `<div class="scroll"><table><thead><tr><th>Player</th><th class="num">Games, week of ${new Date(week.week[0] + "T12:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })}</th><th class="num">Light nights</th><th class="num">Per game</th><th><span class="muted small">Remove</span></th></tr></thead><tbody>${
+      mine.map(p => { const g = weekGames(p.t, week), on = tonight.includes(p.t);
+        return `<tr><td>${esc(p.n)} <span class="muted small">${esc(p.t)} ${p.p}</span>${on ? ' <span class="pill">TONIGHT</span>' : ""}</td><td class="num">${g.length}</td><td class="num">${g.filter(x => x.light).length}</td><td class="num led">${fmt(perGame(p, f, L.k), 2)}</td><td><button class="x" data-rm-mine="${p.id}" aria-label="Remove ${esc(p.n)}">×</button></td></tr>`; }).join("")}</tbody></table></div>`;
 }
 
 /* ---------- pages ---------- */
 async function home() {
-  const [players, week, standings] = await Promise.all([load("players"), load("week"), load("standings")]);
+  const [players, week, standings, T] = await Promise.all([load("players"), load("week"), load("standings"), load("today").catch(() => ({}))]);
   DATA = players; window.WEEK = week;
   $("#week-title").textContent = `${week.four.length} teams play 4 games`;
   $("#week-span").textContent = `${week.week[0]} to ${week.week[1]}`;
   $("#schedule").innerHTML = scheduleTable(week);
-  tabs($("#leader-tabs"), k => { $("#leaders").innerHTML = leadersTable(k); $("#leader-note").textContent = FORMATS[k].name + ". Outside the top 150 in this format, so likely on waivers. Last 14 days blended with season."; });
+  const refresh = () => { tonightPanel(T); myTeamPanel(week, T); };
+  playerPicker($("#add-mine"), p => { const t = store.get("team", []); if (!t.includes(p.id)) { store.set("team", t.concat(p.id)); refresh(); } });
+  document.addEventListener("click", e => { const x = e.target.closest("[data-rm-mine]"); if (!x) return;
+    store.set("team", store.get("team", []).filter(id => String(id) !== x.dataset.rmMine)); refresh(); });
+  tabs($("#leader-tabs"), k => { $("#leaders").innerHTML = leadersTable(k); refresh();
+    $("#leader-note").textContent = FORMATS[k].name + ". Outside the top 150 in this format, so likely on waivers. Last 14 days blended with season."; });
   const byDiv = {};
   standings.rows.forEach(r => (byDiv[r.divisionName] = byDiv[r.divisionName] || []).push(r));
   $("#standings").innerHTML = Object.entries(byDiv).map(([div, rows]) => `<div><h3>${esc(div)}</h3><table><thead><tr><th>Team</th><th class="num">GP</th><th class="num">PTS</th><th class="num">GD</th></tr></thead><tbody>${
@@ -142,14 +199,30 @@ function playerPicker(input, onAdd) {
 async function fantasyTrade() {
   DATA = await load("players");
   const sides = { a: [], b: [] }, games = {};
-  let fkey = "espn";
-  const custom = { ...FORMATS.espn.sk };
+  const L = league(), q = new URLSearchParams(location.search);
+  let fkey = L.k;
+  const custom = { ...(L.custom || FORMATS.espn.sk) };
+  if (q.get("w")) q.get("w").split(",").forEach(kv => { const [k, v] = kv.split(":"); if (SK_KEYS.includes(k)) custom[k] = parseFloat(v) || 0; });
+  if (q.get("f") === "custom" || FORMATS[q.get("f")]) fkey = q.get("f");   // a shared link shows the sender's format
+  const byId = new Map(everyone().map(p => [String(p.id), p]));
+  ["a", "b"].forEach(s => (q.get(s) || "").split(",").map(id => byId.get(id)).filter(Boolean).forEach(p => { sides[s].push(p); games[p.id] = gamesLeft(p); }));
+  const save = () => store.set("league", { k: fkey, custom: fkey === "custom" ? custom : L.custom });
   const fmtOf = () => fkey === "custom" ? { name: "Custom points", type: "points", sk: custom, g: FORMATS.espn.g } : FORMATS[fkey];
   const sel = $("#format");
-  sel.innerHTML = Object.entries(FORMATS).map(([k, f]) => `<option value="${k}">${f.name}</option>`).join("") + `<option value="custom">Custom points (your league)</option>`;
+  sel.innerHTML = Object.entries(FORMATS).filter(([k]) => k !== "custom").map(([k, f]) => `<option value="${k}">${f.name}</option>`).join("") + `<option value="custom">Custom points (your league)</option>`;
   $("#weights").innerHTML = SK_KEYS.map(k => `<div><label for="w-${k}">${LABEL[k]}</label><input id="w-${k}" type="number" step="0.1" value="${custom[k] ?? 0}"></div>`).join("");
-  $("#weights").addEventListener("input", e => { const k = e.target.id.slice(2); custom[k] = parseFloat(e.target.value) || 0; RCACHE = {}; render(); });
-  sel.addEventListener("change", () => { fkey = sel.value; $("#custom").hidden = fkey !== "custom"; RCACHE = {}; ZCACHE = {}; render(); });
+  $("#weights").addEventListener("input", e => { const k = e.target.id.slice(2); custom[k] = parseFloat(e.target.value) || 0; RCACHE = {}; save(); render(); });
+  sel.addEventListener("change", () => { fkey = sel.value; $("#custom").hidden = fkey !== "custom"; RCACHE = {}; ZCACHE = {}; save(); render(); });
+  sel.value = fkey; $("#custom").hidden = fkey !== "custom";
+  $("#share").addEventListener("click", async () => {
+    const p = new URLSearchParams({ f: fkey, a: sides.a.map(x => x.id).join(","), b: sides.b.map(x => x.id).join(",") });
+    if (fkey === "custom") p.set("w", Object.entries(custom).filter(([, v]) => v).map(([k, v]) => `${k}:${v}`).join(","));
+    const url = `${location.origin}${location.pathname}?${p}`, status = $("#share-status");
+    try {
+      if (navigator.share) { await navigator.share({ title: "Who wins this trade?", text: $("#verdict").textContent, url }); status.textContent = "Shared."; }
+      else { await navigator.clipboard.writeText(url); status.textContent = "Link copied. Paste it in your league chat."; }
+    } catch { status.innerHTML = `Copy this link: <input readonly value="${esc(url)}" onfocus="this.select()">`; }
+  });
   ["a", "b"].forEach(s => playerPicker($(`#add-${s}`), p => { if (!sides[s].includes(p)) { sides[s].push(p); games[p.id] = gamesLeft(p); render(); } }));
   document.addEventListener("click", e => { const x = e.target.closest("[data-rm]"); if (!x) return; const [s, id] = x.dataset.rm.split(":"); sides[s] = sides[s].filter(p => String(p.id) !== id); render(); });
   document.addEventListener("input", e => { if (e.target.matches("input.games")) { games[e.target.dataset.id] = Math.max(0, parseInt(e.target.value) || 0); render(false); } });
