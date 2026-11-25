@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fantasy hockey trade calculator for your league&#x27;s scoring | Off-Night Hockey</title><meta name="description" content="Free fantasy hockey trade calculator: ESPN points, Yahoo points, categories, roto or your own scoring. Judges 2-for-1 trades fairly.">
+<meta property="og:title" content="Fantasy hockey trade calculator for your league&#x27;s scoring | Off-Night Hockey"><meta property="og:description" content="Free fantasy hockey trade calculator: ESPN points, Yahoo points, categories, roto or your own scoring. Judges 2-for-1 trades fairly.">
+<meta property="og:url" content="https://offnighthockey.github.io/trade.html"><link rel="canonical" href="https://offnighthockey.github.io/trade.html">
+<link rel="icon" href="icon.png"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&display=swap"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Doto:wght@800&display=swap"><link rel="stylesheet" href="style.css?v=cab30693">
+<script src="app.js?v=63e9bed1" defer></script></head>
+<body data-page="fantasy-trade"><div class="wrap">
+<header class="site"><a href="index.html" aria-label="Off-Night Hockey home"><img src="logo.png" alt="Off-Night Hockey"></a><nav aria-label="Main"><a href="index.html">Home</a><a href="fantasy.html">Fantasy</a><a href="trade.html" aria-current=page>Trade calculator</a><a href="nhl-trade.html">NHL trades</a></nav></header>
+<main>
+<section class="hero"><p class="kicker">Fantasy trade calculator</p><h1>Is it a fair trade in your league?</h1>
+<p class="lede">Pick your format or type your league's scoring, add the players, and adjust games left for anyone hurt. Value is rest-of-season production above a replacement-level pickup, so a 2-for-1 is judged fairly.</p></section>
+<section class="panel"><div class="grid2"><div><label for="format">League format</label><select id="format"></select></div>
+<p class="muted small" id="unit-note"></p></div>
+<div id="custom" hidden><p class="kicker">Your league's points per stat</p><div class="weights" id="weights"></div></div></section>
+<div class="grid2"><section class="panel side"><h3>Side A gets <span>total <span class="led total" id="total-a">0</span></span></h3>
+<label for="add-a">Add a player</label><input id="add-a" placeholder="Start typing a name" autocomplete="off">
+<div class="scroll"><table><thead><tr><th>Player</th><th class="num">Per game</th><th class="num">Games left</th><th class="num">Value</th><th><span class="muted small">Remove</span></th></tr></thead><tbody id="list-a"></tbody></table></div></section><section class="panel side"><h3>Side B gets <span>total <span class="led total" id="total-b">0</span></span></h3>
+<label for="add-b">Add a player</label><input id="add-b" placeholder="Start typing a name" autocomplete="off">
+<div class="scroll"><table><thead><tr><th>Player</th><th class="num">Per game</th><th class="num">Games left</th><th class="num">Value</th><th><span class="muted small">Remove</span></th></tr></thead><tbody id="list-b"></tbody></table></div></section></div>
+<section class="panel"><p class="verdict" id="verdict" aria-live="polite">Add players to both sides</p>
+<p class="muted small">How it works: a blended per-game rate (70% season, 30% last 14 days) times games left, minus what a replacement-level player would give you. Goalies use their share of starts. Injuries aren't in the public data, so lower a hurt player's games left yourself.</p></section>
+</main>
+<footer class="site">Stats from the NHL's public data feeds, refreshed weekly (last update <span id="updated">this week</span>).
+Not affiliated with the NHL, its teams, ESPN or Yahoo. Fantasy values are estimates; your league's settings and injuries change them.</footer>
+</div></body></html>

@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NHL trade calculator: compare players in a real trade | Off-Night Hockey</title><meta name="description" content="Compare the players in a real NHL trade: production, 84-game pace, ice time, power-play role and the cap swing.">
+<meta property="og:title" content="NHL trade calculator: compare players in a real trade | Off-Night Hockey"><meta property="og:description" content="Compare the players in a real NHL trade: production, 84-game pace, ice time, power-play role and the cap swing.">
+<meta property="og:url" content="https://offnighthockey.github.io/nhl-trade.html"><link rel="canonical" href="https://offnighthockey.github.io/nhl-trade.html">
+<link rel="icon" href="icon.png"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&display=swap"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Doto:wght@800&display=swap"><link rel="stylesheet" href="style.css?v=cab30693">
+<script src="app.js?v=63e9bed1" defer></script></head>
+<body data-page="nhl-trade"><div class="wrap">
+<header class="site"><a href="index.html" aria-label="Off-Night Hockey home"><img src="logo.png" alt="Off-Night Hockey"></a><nav aria-label="Main"><a href="index.html">Home</a><a href="fantasy.html">Fantasy</a><a href="trade.html">Trade calculator</a><a href="nhl-trade.html" aria-current=page>NHL trades</a></nav></header>
+<main>
+<section class="hero"><p class="kicker">NHL trade calculator</p><h1>Who wins the real trade?</h1>
+<p class="lede">Compare the players in a real or rumored NHL trade side by side: production, pace over 84 games, ice time and power-play role. Add cap hits to see the cap swing.</p></section>
+<div class="grid2"><section class="panel side"><h3>Side A gets <span>total <span class="led total" id="total-a">0</span></span></h3>
+<label for="add-a">Add a player</label><input id="add-a" placeholder="Start typing a name" autocomplete="off">
+<div class="scroll"><table><thead><tr><th>Player</th><th class="num">Games</th><th class="num">G-A-P / SV%</th><th class="num">Pace</th><th class="num">Role</th><th class="num">Cap $M</th><th><span class="muted small">Remove</span></th></tr></thead><tbody id="list-a"></tbody></table></div></section><section class="panel side"><h3>Side B gets <span>total <span class="led total" id="total-b">0</span></span></h3>
+<label for="add-b">Add a player</label><input id="add-b" placeholder="Start typing a name" autocomplete="off">
+<div class="scroll"><table><thead><tr><th>Player</th><th class="num">Games</th><th class="num">G-A-P / SV%</th><th class="num">Pace</th><th class="num">Role</th><th class="num">Cap $M</th><th><span class="muted small">Remove</span></th></tr></thead><tbody id="list-b"></tbody></table></div></section></div>
+<section class="panel"><p class="verdict" id="verdict" aria-live="polite">Add players to both sides</p><p class="muted" id="cap-swing"></p>
+<p class="muted small">Totals are each side's combined skater points pace over 84 games. Real trades also turn on contracts, term, prospects and picks, which aren't in the NHL's public data, so this compares on-ice production only. Enter cap hits yourself if you know them.</p></section>
+</main>
+<footer class="site">Stats from the NHL's public data feeds, refreshed weekly (last update <span id="updated">this week</span>).
+Not affiliated with the NHL, its teams, ESPN or Yahoo. Fantasy values are estimates; your league's settings and injuries change them.</footer>
+</div></body></html>
