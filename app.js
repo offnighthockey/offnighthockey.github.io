@@ -18,7 +18,8 @@ let DATA = null;
 const $ = (s, el = document) => el.querySelector(s);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const fmt = (x, d = 1) => (Math.round(x * 10 ** d) / 10 ** d).toFixed(d);
-async function load(name) { const r = await fetch(`data/${name}.json`); if (!r.ok) throw new Error(name); return r.json(); }
+async function load(name) {   // hourly version tag: new daily data reaches every browser within the hour
+  const r = await fetch(`data/${name}.json?h=${new Date().toISOString().slice(0, 13)}`); if (!r.ok) throw new Error(name); return r.json(); }
 
 /* ---------- saved in this browser only (league and team); private windows may block storage, so every call is guarded ---------- */
 const store = {
@@ -253,11 +254,16 @@ function lineupFix(Z, d, mine, f, k) {   // ESPN's saved lineup against the best
   const benchIn = rows.filter(r => used.has(r.p.id) && LINEUP[r.p.id] === 7).sort((a, b) => b.v - a.v);
   // starters to pull: the out ones first (they score nothing), then the weakest who lost their spot
   const dead = playing.filter(p => (isOut(p) || startOn(p, d) === 0) && LINEUP[p.id] !== 7 && LINEUP[p.id] !== 8).map(p => ({ p, v: 0, out: true }));
-  const startOut = dead.concat(rows.filter(r => !used.has(r.p.id) && LINEUP[r.p.id] !== 7 && LINEUP[r.p.id] !== 8).sort((a, b) => a.v - b.v));
-  const n = Math.min(benchIn.length, startOut.length);
-  if (!n) return null;
-  const ins = benchIn.slice(0, n), outs = startOut.slice(0, n);
+  const displaced = rows.filter(r => !used.has(r.p.id) && LINEUP[r.p.id] !== 7 && LINEUP[r.p.id] !== 8).sort((a, b) => a.v - b.v);
+  if (!benchIn.length) return null;   // an out starter only matters if someone on the bench can take the spot
+  const ins = benchIn, canFill = r => ins.some(x => isG(x.p) === isG(r.p));
+  const outs = dead.filter(canFill).concat(displaced);
   return { ins, outs, gain: ins.reduce((a, r) => a + r.v * startOn(r.p, d), 0) - outs.reduce((a, r) => a + r.v * (r.out ? 0 : startOn(r.p, d)), 0) };
+}
+function fixText(fx) {   // who to start and who to bench; ESPN moves the slots around for you
+  const nm = r => esc(r.p.n) + (r.out ? (isG(r.p) ? " (not starting)" : " (out)") : "");
+  return "Lineup fix tonight: start " + fx.ins.map(nm).join(", ") + (fx.outs.length ? "; bench " + fx.outs.map(nm).join(", ") : "")
+    + (fx.gain > 0.05 ? `. About +${fmt(fx.gain, 1)} points.` : ".");
 }
 
 /* ---------- shared: the header scoring picker and the night board ---------- */
@@ -415,7 +421,7 @@ async function home() {
     const empty = W.nights.filter(nt => nt.n).reduce((a, nt) => a + openSkaters(nt.left), 0), top = bestAdds(Z, W, mine, f, k)[0];
     const on = mine.filter(p => Z.plays.has(p.t + sel)).length;
     const fix = sel === today ? lineupFix(Z, today, mine, f, k) : null;
-    $("#snap-body").innerHTML = (fix ? `<p class="alert">Lineup fix tonight: start ${fix.ins.map(r => esc(r.p.n)).join(", ")} over ${fix.outs.map(r => esc(r.p.n) + (r.out ? " (" + (isG(r.p) ? "not starting" : "out") + ")" : "")).join(", ")} (about +${fmt(fix.gain, 1)}).</p>` : "")
+    $("#snap-body").innerHTML = (fix ? `<p class="alert">${fixText(fix)}</p>` : "")
       + `<p class="big-line"><span class="led">${fmt(tot.u, 0)}</span> of ${fmt(tot.g, 0)} games usable</p>
       <p class="note">${wk ? "Next week" : from === today ? "Rest of this week" : "This week"}, with ${empty} empty skater spot-nights.</p>
       <p>${sel === today ? "Tonight" : dayName(sel)}: ${on} of your ${mine.length} players play.</p>
@@ -529,7 +535,7 @@ async function teamPage() {
         Projected final <b>${fmt(ma, 0)}</b> to <b>${fmt(mb, 0)}</b>${Math.abs(ma - mb) < 8 ? ", close enough that one add or lineup call matters." : ma > mb ? ", you're ahead." : ", you're behind: use your open spots."}</p>`;
     }
     const fx = span === "rest" ? lineupFix(Z, today, mine, f, k) : null;
-    if (fx) fixHTML = `<p class="alert">Lineup fix tonight: start ${fx.ins.map(r => esc(r.p.n)).join(", ")} over ${fx.outs.map(r => esc(r.p.n) + (r.out ? " (" + (isG(r.p) ? "not starting" : "out") + ")" : "")).join(", ")}. About +${fmt(fx.gain, 1)} points. (Your ESPN lineup as of the last sync.)</p>`;
+    if (fx) fixHTML = `<p class="alert">${fixText(fx)} <span class="note">(Your ESPN lineup as of the last sync.)</span></p>`;
     $("#summary").innerHTML = fixHTML + matchup + `<p class="big-line">You can use <span class="led">${fmt(tot.u, 0)}</span> of your players' ${fmt(tot.g, 0)} games</p>
       <p class="note">${dayDate(from)} to ${dayDate(to)}. ${tot.g - tot.u >= 0.5 ? `${fmt(tot.g - tot.u, 0)} sit on your bench on crowded nights. ` : ""}${empty ? `${empty} skater spot-nights stay empty${worst && openSkaters(worst.left) ? `, most on ${dayName(worst.d)} (${openSkaters(worst.left)})` : ""}. Empty spots score zero.` : "Every spot is filled every night."}</p>`;
     const nt = W.nights.find(x => x.d === sel), bySlot = {};
