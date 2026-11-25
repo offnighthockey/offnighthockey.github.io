@@ -291,7 +291,7 @@ function segment(el, onPick) {
 const longDate = d => new Date(d + "T12:00Z").toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", timeZone: "UTC" });
 const teamsOn = (Z, d) => Z.teams.filter(t => Z.plays.has(t + d));
 const recentRate = (p, f) => f.type === "points" && p.r && p.rgp >= 3 ? Object.entries(f.sk).reduce((s, [k, w]) => s + w * (p.r[k] || 0), 0) / p.rgp : null;   // last 14 days only: who is hot
-const who = p => `${esc(p.n)}<span class="meta">${esc(p.t)} ${POS[p.p]}</span>`;
+const who = p => `${esc(p.n)}<span class="meta">${esc(p.t)} ${POS[p.p]}</span>${badge(p)}`;
 function myRoster() { const byId = new Map(everyone().map(p => [p.id, p])); return store.get("team", []).map(id => byId.get(id)).filter(Boolean); }
 function nightStreamers(Z, d, k, n, fitsOpen) {
   const f = FORMATS[k], teams = new Set(teamsOn(Z, d)), cut = waiverCut(k), have = new Set(store.get("team", []));
@@ -329,8 +329,19 @@ const startShare = p => isG(p) ? Math.min(1, p.gs / Math.max(DATA.teams[p.t].pla
 // Out: his team played at least twice in the last 7 days and he didn't dress (injury, suspension, scratch, sent down), or ESPN lists him out
 const OUT_INJ = new Set(["OUT", "INJURY_RESERVE", "SUSPENSION"]);
 const missing = p => !isG(p) && p.gp >= 3 && (DATA.teams[p.t] || {}).g7 >= 2 && !p.l7;
-const isOut = p => OUT_INJ.has(INJ[p.id]) || missing(p);
-const outLabel = p => INJ[p.id] === "SUSPENSION" ? "SUSP" : INJ[p.id] === "DAY_TO_DAY" ? "DTD" : isOut(p) ? "OUT" : "";
+// Status order: the daily injury list (p.inj), then ESPN's fantasy flag (INJ), then the missing-games check
+const LIST_OUT = new Set(["Out", "Injured Reserve", "Suspension"]);
+const isOut = p => (p.inj && LIST_OUT.has(p.inj.s)) || OUT_INJ.has(INJ[p.id]) || missing(p);
+function outLabel(p) {
+  const s = p.inj ? p.inj.s : "", f = INJ[p.id] || "";
+  if (s === "Suspension" || f === "SUSPENSION") return "SUSP";
+  if (s === "Injured Reserve" || f === "INJURY_RESERVE") return "IR";
+  if (isOut(p)) return "OUT";
+  return s === "Day-To-Day" || f === "DAY_TO_DAY" ? "DTD" : "";
+}
+const injNote = p => p.inj ? [p.inj.type, p.inj.ret ? "expected back about " + dayDate(p.inj.ret) : ""].filter(Boolean).join(", ")
+  : missing(p) ? "hasn't dressed in his team's recent games" : "";
+const badge = p => { const l = outLabel(p); return l ? ` <span class="pill ${l === "DTD" ? "amber" : "out"}" title="${esc(injNote(p) || l)}">${l}</span>` : ""; };
 function startOn(p, d) {   // ESPN's expected or confirmed starter takes the night; his teammate gets none
   if (!isG(p)) return 1;
   const g = (GSTART[d] || {})[p.t];
@@ -510,7 +521,7 @@ async function teamPage() {
   const draw = () => {
     const mine = myRoster(), k = league().k, f = FORMATS[k], [from, to] = range(), slots = slotSet();
     $("#roster-count").textContent = mine.length ? `${mine.length} players` : "";
-    $("#roster").innerHTML = mine.map(p => `<li><span>${esc(p.n)}<span class="pos">${esc(p.t)} ${POS[p.p]}</span>${outLabel(p) ? ` <span class="pill out">${outLabel(p)}</span>` : ""}</span><button class="x" type="button" data-rm="${p.id}" aria-label="Remove ${esc(p.n)}">×</button></li>`).join("");
+    $("#roster").innerHTML = mine.map(p => `<li><span>${esc(p.n)}<span class="pos">${esc(p.t)} ${POS[p.p]}</span>${badge(p)}</span><button class="x" type="button" data-rm="${p.id}" aria-label="Remove ${esc(p.n)}">×</button></li>`).join("");
     const W = usableWeek(Z, mine, from, to, slots, f, k), withGames = W.nights.filter(nt => nt.n);
     if (!sel || !W.nights.some(nt => nt.d === sel)) sel = (withGames[0] || W.nights[0]).d;
     $("#board").innerHTML = boardHTML(W.nights.map(nt => nt.d), sel, d => { const nt = W.nights.find(x => x.d === d), o = openSkaters(nt.left);
@@ -547,7 +558,7 @@ async function teamPage() {
     $("#night-detail").innerHTML = `<div class="panel-head"><h2>${longDate(sel)}</h2><span class="note">${nt.n ? nt.n + " NHL games" : "No NHL games"}</span></div>
       ${!nt.n ? `<p class="note">Nobody plays. Pick another night on the board.</p>` : `<div class="lineup">
       <div><h3>Starting (${nt.used.size})</h3><ul>${Object.entries(bySlot).sort(([a], [b]) => SLOT_KEYS.indexOf(a) - SLOT_KEYS.indexOf(b)).map(([s, rs]) => rs.map(r => `<li>${who(r.p)}${gcall(r.p)} <span class="pill">${s}</span></li>`).join("")).join("") || "<li class='muted'>Nobody plays tonight</li>"}</ul>
-      ${sitting.length ? `<h3 style="margin-top:14px">Not playing</h3><ul>${sitting.map(p => `<li>${who(p)} <span class="pill out">${isG(p) ? "BACKUP" : outLabel(p) || "OUT"}</span></li>`).join("")}</ul>` : ""}</div>
+      ${sitting.length ? `<h3 style="margin-top:14px">Not playing</h3><ul>${sitting.map(p => `<li>${who(p)}${isG(p) && !isOut(p) ? ' <span class="pill out">BACKUP</span>' : ""}${injNote(p) ? `<span class="meta">${esc(injNote(p))}</span>` : ""}</li>`).join("")}</ul>` : ""}</div>
       <div><h3>On the bench (${benched.length})</h3><ul>${benched.map(r => `<li>${who(r.p)}</li>`).join("") || "<li class='muted'>Nobody. Everyone who plays starts.</li>"}</ul>
       <h3 style="margin-top:14px">Open spots</h3><p>${open.length ? open.map(([s, c]) => `${c} ${s}`).join(", ") : "None"}</p></div>
       <div><h3>Fill an open spot</h3><ul>${fill.map(x => `<li>${who(x.p)} <span class="led">${fmt(x.v, 2)}</span></li>`).join("") || "<li class='muted'>No open skater spots</li>"}</ul></div></div>`}`;
@@ -559,7 +570,7 @@ async function teamPage() {
     $("#mine").innerHTML = `<div class="scroll"><table><thead><tr><th>Player</th><th class="num">Games</th><th class="num">Usable</th><th class="num">Benched</th><th class="num">Light nights</th><th class="num">Per game</th></tr></thead><tbody>${
       W.rows.map(r => { const g = r.games * startShare(r.p), bench = g - r.used, d = isG(r.p) ? 1 : 0;
         return `<tr><td>${who(r.p)}</td><td class="num">${fmt(g, d)}</td><td class="num led">${fmt(r.used, d)}</td><td class="num${bench >= 0.5 ? " warn" : ""}">${bench >= 0.5 ? fmt(bench, d) : ""}</td><td class="num">${r.light}</td><td class="num">${fmt(r.v, 2)}</td></tr>`; }).join("")}</tbody></table></div>
-      <p class="note">Goalies count expected starts (ESPN's starter call when we have it, otherwise his share of his team's starts). OUT means his team has played twice or more in the last 7 days without him, or ESPN lists him out, so he doesn't count.</p>`;
+      <p class="note">Goalies count expected starts (ESPN's starter call when we have it, otherwise his share of his team's starts). IR, OUT and SUSP come from the daily NHL injury list; we also mark a player OUT when his team has played twice or more in the last 7 days without him. They don't count. DTD (day-to-day) players still count.</p>`;
   };
   playerPicker($("#add-mine"), p => { const t = store.get("team", []); if (!t.includes(p.id)) { store.set("team", t.concat(p.id)); draw(); } });
   $("#roster").addEventListener("click", e => { const x = e.target.closest("[data-rm]"); if (!x) return;
