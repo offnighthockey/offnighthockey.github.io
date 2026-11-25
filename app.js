@@ -282,7 +282,101 @@ async function nhlTrade() {
   render();
 }
 
-const PAGES = { home, hub, "fantasy-trade": fantasyTrade, "nhl-trade": nhlTrade };
+/* ---------- season schedule planner: any week, look-ahead, back-to-backs, fantasy playoffs, goalie starts ---------- */
+const LIGHT = 7, PACKED = 13;   // light night: 7 or fewer games (open bench spots); packed: 13 or more
+const addDays = (iso, n) => { const d = new Date(iso + "T12:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+const mondayOf = iso => addDays(iso, -((new Date(iso + "T12:00Z").getUTCDay() + 6) % 7));
+const dayName = iso => new Date(iso + "T12:00Z").toLocaleDateString("en-US", { weekday: "short", timeZone: "UTC" });
+const dayDate = iso => new Date(iso + "T12:00Z").toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+const nightKind = n => n === 0 ? "none" : n <= LIGHT ? "light" : n >= PACKED ? "packed" : "";
+
+function seasonIndex(S) {
+  const perDay = new Map(), byTeam = {};
+  for (const [d, a, h] of S.games) {
+    perDay.set(d, (perDay.get(d) || 0) + 1);
+    (byTeam[a] = byTeam[a] || []).push({ d, opp: h, home: false });
+    (byTeam[h] = byTeam[h] || []).push({ d, opp: a, home: true });
+  }
+  for (const t in byTeam) byTeam[t].sort((x, y) => (x.d < y.d ? -1 : 1)).forEach((g, i, a) => { g.b2b = i > 0 && addDays(a[i - 1].d, 1) === g.d; });
+  const weeks = [];
+  for (let m = mondayOf(S.games[0][0]); m <= S.games[S.games.length - 1][0]; m = addDays(m, 7)) weeks.push(m);
+  return { perDay, byTeam, weeks, teams: Object.keys(byTeam).sort() };
+}
+function teamRange(Z, t, from, to) {
+  const g = Z.byTeam[t].filter(x => x.d >= from && x.d <= to);
+  return { t, g, games: g.length, light: g.filter(x => Z.perDay.get(x.d) <= LIGHT).length, b2b: g.filter(x => x.b2b).length, home: g.filter(x => x.home).length };
+}
+const bestFirst = (a, b) => b.games - a.games || b.light - a.light || a.b2b - b.b2b || (a.t < b.t ? -1 : 1);
+const SORTS = { best: bestFirst, worst: (a, b) => -bestFirst(a, b), az: (a, b) => (a.t < b.t ? -1 : 1) };
+const weekLabel = (Z, m) => `Week ${Z.weeks.indexOf(m) + 1} · ${dayDate(m)} to ${dayDate(addDays(m, 6))}`;
+function myTeams() { const ids = store.get("team", []); return new Set(everyone().filter(p => ids.includes(p.id)).map(p => p.t)); }
+const teamCell = (t, mine) => `<strong>${esc(t)}</strong>${mine.has(t) ? ' <span class="pill">YOURS</span>' : ""}`;
+
+function weekGrid(Z, mon, span, sort) {
+  const to = addDays(mon, 7 * span - 1), mine = myTeams();
+  const rows = Z.teams.map(t => teamRange(Z, t, mon, to)).sort(SORTS[sort]);
+  if (span > 1) {
+    const wks = Array.from({ length: span }, (_, i) => addDays(mon, 7 * i));
+    return `<div class="scroll"><table><thead><tr><th>Team</th><th class="num">Games</th><th class="num">Light-night games</th><th class="num">Back-to-backs</th><th class="num">Home</th><th class="num">By week</th></tr></thead><tbody>${
+      rows.map(r => `<tr${mine.has(r.t) ? ' class="mine"' : ""}><td>${teamCell(r.t, mine)}</td><td class="num led">${r.games}</td><td class="num">${r.light}</td><td class="num">${r.b2b}</td><td class="num">${r.home}</td><td class="num muted">${
+        wks.map(w => r.g.filter(x => x.d >= w && x.d <= addDays(w, 6)).length).join(" · ")}</td></tr>`).join("")}</tbody></table></div>`;
+  }
+  const days = Array.from({ length: 7 }, (_, i) => addDays(mon, i));
+  const head = days.map(d => { const n = Z.perDay.get(d) || 0, k = nightKind(n);
+    return `<th class="num ${k === "light" ? "light" : ""}">${dayName(d)}<br><span class="small ${k === "light" ? "" : "muted"}">${n ? (k === "light" ? "LIGHT " : k === "packed" ? "PACKED " : "") + n : "NO GAMES"}</span></th>`; }).join("");
+  return `<div class="scroll"><table class="sched"><thead><tr><th>Team</th>${head}<th class="num">GP</th><th class="num">Light</th><th class="num">B2B</th></tr></thead><tbody>${
+    rows.map(r => `<tr${mine.has(r.t) ? ' class="mine"' : ""}><td>${teamCell(r.t, mine)}</td>${days.map(d => { const g = r.g.find(x => x.d === d), k = nightKind(Z.perDay.get(d) || 0);
+      return `<td class="opp ${k === "light" ? "light" : ""}">${g ? `${g.home ? "vs" : "@"} ${esc(g.opp)}${g.b2b ? "*" : ""}` : ""}</td>`; }).join("")}<td class="num led">${r.games}</td><td class="num">${r.light}</td><td class="num">${r.b2b}</td></tr>`).join("")}</tbody></table></div>`;
+}
+function nightStrip(Z, mon) {
+  return `<div class="nights">${Array.from({ length: 7 }, (_, i) => addDays(mon, i)).map(d => { const n = Z.perDay.get(d) || 0, k = nightKind(n);
+    return `<div class="night ${k}"><span class="small">${dayName(d)} ${dayDate(d)}</span><b class="led">${n}</b><span class="small">${k === "light" ? "light night" : k === "packed" ? "packed" : k === "none" ? "no games" : "games"}</span></div>`; }).join("")}</div>`;
+}
+function playoffTable(Z, from, to) {
+  const end = addDays(to, 6), mine = myTeams(), wks = Z.weeks.filter(w => w >= from && w <= to);
+  const rows = Z.teams.map(t => teamRange(Z, t, from, end)).sort(bestFirst);
+  return `<p class="small muted">${wks.length} week${wks.length > 1 ? "s" : ""}, ${dayDate(from)} to ${dayDate(end)}. Ranked by games, then light-night games, then fewest back-to-backs.</p><div class="scroll"><table><thead><tr><th>#</th><th>Team</th><th class="num">Games</th><th class="num">Light-night games</th><th class="num">Back-to-backs</th><th class="num">By week</th></tr></thead><tbody>${
+    rows.map((r, i) => `<tr${mine.has(r.t) ? ' class="mine"' : ""}><td class="muted">${i + 1}</td><td>${teamCell(r.t, mine)}</td><td class="num led">${r.games}</td><td class="num">${r.light}</td><td class="num">${r.b2b}</td><td class="num muted">${
+      wks.map(w => r.g.filter(x => x.d >= w && x.d <= addDays(w, 6)).length).join(" · ")}</td></tr>`).join("")}</tbody></table></div>`;
+}
+function goalieTable(Z, mon) {
+  const to = addDays(mon, 6), L = league(), f = FORMATS[L.k];
+  const rows = DATA.goalies.filter(g => DATA.teams[g.t] && g.gs >= 1).map(g => {
+    const share = Math.min(1, g.gs / Math.max(DATA.teams[g.t].played, 1)), r = teamRange(Z, g.t, mon, to);
+    return { g, share, r, exp: share * r.games, v: perGame(g, f, L.k) };
+  }).filter(x => x.share >= 0.15 && x.r.games).sort((a, b) => b.exp - a.exp || b.v - a.v).slice(0, 40);
+  return `<div class="scroll"><table><thead><tr><th>Goalie</th><th>Team</th><th class="num">Share of starts</th><th class="num">Team games</th><th class="num">B2B</th><th class="num">Expected starts</th><th class="num">${f.type === "points" ? "Pts per start" : "Value per start"}</th></tr></thead><tbody>${
+    rows.map(x => `<tr><td>${esc(x.g.n)}</td><td>${esc(x.g.t)}</td><td class="num">${Math.round(x.share * 100)}%</td><td class="num">${x.r.games}</td><td class="num">${x.r.b2b || ""}</td><td class="num led">${fmt(x.exp, 1)}</td><td class="num">${fmt(x.v, 2)}</td></tr>`).join("")}</tbody></table></div>`;
+}
+
+async function schedulePlanner() {
+  const [S, players] = await Promise.all([load("schedule"), load("players")]);
+  DATA = players;
+  const Z = seasonIndex(S), q = new URLSearchParams(location.search);
+  const now = mondayOf(todayISO()), wkSel = $("#wk"), spanSel = $("#span"), sortSel = $("#sort");
+  const opts = Z.weeks.map(m => `<option value="${m}">${weekLabel(Z, m)}</option>`).join("");
+  wkSel.innerHTML = opts;
+  wkSel.value = Z.weeks.includes(q.get("week")) ? q.get("week") : Z.weeks.includes(now) ? now : Z.weeks[0];
+  const draw = () => {
+    const mon = wkSel.value;
+    $("#nights").innerHTML = nightStrip(Z, mon);
+    $("#grid").innerHTML = weekGrid(Z, mon, +spanSel.value, sortSel.value);
+    $("#goalie-week").textContent = weekLabel(Z, mon);
+    $("#goalies").innerHTML = goalieTable(Z, mon);
+  };
+  [wkSel, spanSel, sortSel].forEach(el => el.addEventListener("change", draw));
+  const P = store.get("playoffs", { from: Z.weeks[Z.weeks.length - 3], to: Z.weeks[Z.weeks.length - 1] });
+  const pf = $("#po-from"), pt = $("#po-to");
+  pf.innerHTML = pt.innerHTML = opts;
+  pf.value = Z.weeks.includes(P.from) ? P.from : Z.weeks[Z.weeks.length - 3];
+  pt.value = Z.weeks.includes(P.to) ? P.to : Z.weeks[Z.weeks.length - 1];
+  const drawPO = () => { if (pt.value < pf.value) pt.value = pf.value; store.set("playoffs", { from: pf.value, to: pt.value }); $("#playoffs").innerHTML = playoffTable(Z, pf.value, pt.value); };
+  [pf, pt].forEach(el => el.addEventListener("change", drawPO));
+  tabs($("#sched-tabs"), () => draw());   // the scoring format only changes the goalie value column
+  drawPO();
+}
+
+const PAGES = { home, hub, "fantasy-trade": fantasyTrade, "nhl-trade": nhlTrade, schedule: schedulePlanner };
 document.addEventListener("DOMContentLoaded", () => {
   const fn = PAGES[document.body.dataset.page];
   if (fn) fn().catch(err => { const m = document.querySelector("main"); m.insertAdjacentHTML("afterbegin", `<p class="panel red">Couldn't load the data (${esc(err.message)}). Try reloading.</p>`); });
