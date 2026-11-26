@@ -254,5 +254,8 @@ html:active-view-transition-type(left)::view-transition-group(rider) { animation
   .board { gap: 4px; } .tile { padding: 7px 0 6px; border-radius: 10px; } .tile .dn { font-size: 15px; } .tile .dd, .tile .dl { font-size: 10.5px; } .tile b { font-size: 24px; }
   .ar-nights { gap: 4px; } .ar-nights b { font-size: 22px; } .ar-nights small { font-size: 10px; }
   td { font-size: 15px; padding: 7px 6px; } th { padding: 6px; } td .meta { display: block; margin-left: 0; } .why { margin: 4px 0 0; }
+  table.rc thead { display: none; } table.rc tr { display: grid; grid-template-columns: 1fr auto; grid-template-areas: "when when" "who verdict" "call call" "what what"; gap: 3px 10px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+  table.rc td { border: 0; padding: 0; } table.rc td:nth-child(1) { grid-area: when; color: var(--dim); font-size: 13px; } table.rc td:nth-child(2) { grid-area: who; } table.rc td:nth-child(3) { grid-area: call; }
+  table.rc td:nth-child(4) { grid-area: what; text-align: left; } table.rc td:nth-child(5) { grid-area: verdict; align-self: center; }
   .vt-rider svg { width: 170px; height: 125px; top: calc(50% - 62px); } .vt-rider::after { width: 220px; right: 30px; top: calc(50% + 34px); }
 }

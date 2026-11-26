@@ -496,7 +496,7 @@ function arenaTonight() {
     <h3 class="ar-h3">Best schedules this week <small>most games, then most light-night games</small></h3>
     <div class="ar-best">${best.map(r => `<button type="button" class="ar-sched spot${mineT.has(r.t) ? " mine" : ""}" data-team="${r.t}">${tbadge(r.t)}<b>${r.games}</b><span>games, ${r.light} on light nights${r.b2b ? `, ${r.b2b} back-to-back` : ""}</span></button>`).join("")}</div>
     <h3 class="ar-h3">Waiver leaders <small>${esc(f.name)}</small></h3><div class="panel">${leadersTable(k, 10)}</div>
-    <p class="ar-more"><a href="waiver-wire.html">Full waiver wire</a><a href="schedule.html">Schedule planner</a><a href="nhl-4-game-teams-this-week.html">4-game teams</a></p>`;
+    <p class="ar-more"><a href="waiver-wire.html">Full waiver wire</a><a href="schedule.html">Schedule planner</a><a href="nhl-4-game-teams-this-week.html">4-game teams</a><a href="receipts.html">How our calls did</a></p>`;
 }
 const vfmtA = x => fmt(x, 2);
 function teamVM(t) {
@@ -937,7 +937,32 @@ const NAV_HOME = { "nhl-trade.html": "trade.html", "fantasy.html": "waiver-wire.
 const pageSlot = path => { const f = path.split("/").pop() || "index.html"; return NAV_ORDER.indexOf(NAV_HOME[f] || f); };
 addEventListener("pageswap", () => { try { sessionStorage.setItem("onh.from", String(pageSlot(location.pathname))); } catch { /* no storage: the swipe just goes left to right */ } });
 
-const PAGES = { home, team: teamPage, hub, "fantasy-trade": fantasyTrade, "nhl-trade": nhlTrade, schedule: schedulePlanner };
+async function receiptsPage() {   // research 28: every public call, graded against the average skater over the same days
+  const R = await load("receipts"), done = R.calls.filter(c => c.result).reverse(), open = R.calls.filter(c => !c.result);
+  const V = { hit: ["Hit", ""], close: ["Close", "amber"], miss: ["Miss", "out"], dnp: ["Didn't play", "out"] };
+  const day = iso => new Date(iso + "T12:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  const when = c => c.from === c.to ? day(c.from) : `${day(c.from)} to ${day(c.to)}`;
+  const who = c => `${esc(c.name)} <span class="muted small">${c.team} ${c.pos}</span>`;
+  const said = c => `${c.kind === "drop" ? "Drop" : "Add"}, ${esc(c.source)}${c.said != null ? `<span class="meta" style="display:block;margin:0">${c.said.toFixed(2)} a game then, ${esc(c.basis)}</span>` : c.why ? `<span class="meta" style="display:block;margin:0">${esc(c.why)}</span>` : ""}`;
+  const line = r => Object.entries(r.line).filter(([, v]) => v).map(([k, v]) => `${v} ${k}`).join(", ") || "no points";
+  const hits = xs => xs.filter(c => c.result.verdict === "hit").length;
+  $("#rc-rule").textContent = R.rule;
+  if (done.length) {
+    const by = [...new Set(done.map(c => c.source))].map(s => { const xs = done.filter(c => c.source === s); return `${esc(s)}: ${hits(xs)} of ${xs.length}`; }).join(". ");
+    $("#rc-score").innerHTML = `<p class="big-line"><span class="led">${hits(done)}</span> hit${hits(done) === 1 ? "" : "s"} in <span class="led">${done.length}</span> graded call${done.length === 1 ? "" : "s"}</p><p class="note">${by}.</p>`;
+  } else {
+    const next = open.map(c => c.to).sort()[0];
+    $("#rc-score").innerHTML = `<p class="big-line">No grades yet.</p><p class="note">We started logging on November 25, 2026. ${next ? `The first grades land the morning after ${day(next)}.` : ""} Open calls are below, so you can hold us to them.</p>`;
+  }
+  $("#rc-graded").innerHTML = done.length ? `<table class="ev rc"><thead><tr><th>When</th><th>Player</th><th>Our call</th><th class="num">What happened</th><th>Verdict</th></tr></thead><tbody>${done.map(c => { const r = c.result, v = V[r.verdict];
+    return `<tr><td>${when(c)}</td><td>${who(c)}</td><td>${said(c)}</td><td class="num">${r.gp} GP, <span class="led">${r.fp}</span> pts<span class="meta">${r.gp ? `${r.per_game.toFixed(2)} a game vs ${r.bar.toFixed(2)} average. ` : ""}${line(r)}</span></td><td><span class="pill ${v[1]}">${v[0]}</span></td></tr>`; }).join("")}</tbody></table>`
+    : `<p class="note">Nothing graded yet.</p>`;
+  $("#rc-open").innerHTML = open.length ? `<table class="rc"><thead><tr><th>When</th><th>Player</th><th>Our call</th></tr></thead><tbody>${open.map(c => `<tr><td>${when(c)}</td><td>${who(c)}</td><td>${said(c)}</td></tr>`).join("")}</tbody></table>`
+    : `<p class="note">No open calls right now.</p>`;
+  $("#updated").textContent = R.updated;
+}
+
+const PAGES = { home, team: teamPage, hub, "fantasy-trade": fantasyTrade, "nhl-trade": nhlTrade, schedule: schedulePlanner, receipts: receiptsPage };
 function parkPuck() {   // inner pages: the puck rests under the section the page belongs to
   const w = $(".ar-words [aria-current]"), puck = $(".ar-puck"); if (!puck) return;
   if (!w) { puck.hidden = true; return; }
