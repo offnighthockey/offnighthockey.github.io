@@ -502,11 +502,16 @@ const vfmtA = x => fmt(x, 2);
 function teamVM(t) {
   const T = ARENA.teams[t], byId = new Map(everyone().map(p => [p.id, p])), k = league().k, f = FORMATS[k];
   const roster = T.roster.map(([id, n, pos, num]) => ({ id, n, pos, num, p: byId.get(id) }));
-  const healthy = roster.filter(r => r.p && !isOut(r.p)), ice = r => r.p.rt || r.p.toi;
+  const healthy = roster.filter(r => r.p && !isOut(r.p)), ice = r => r.p ? r.p.rt || r.p.toi : 0, LCR = (a, b) => "LCR".indexOf(a.pos) - "LCR".indexOf(b.pos);
   const F = healthy.filter(r => "CLR".includes(r.pos)).sort((a, b) => ice(b) - ice(a)), D = healthy.filter(r => r.pos === "D").sort((a, b) => ice(b) - ice(a));
-  return { t, f, k, ice, name: ARENA.names[t] || t, record: ARENA.stand[t] || "", roster,
-    lines: [0, 1, 2, 3].map(i => F.slice(i * 3, i * 3 + 3)), pairs: [0, 1, 2].map(i => D.slice(i * 2, i * 2 + 2)), extra: F.slice(12).concat(D.slice(6)),
-    G: roster.filter(r => r.pos === "G" && r.p).sort((a, b) => b.p.gs - a.p.gs), pp1: healthy.filter(r => r.pos !== "G").sort((a, b) => b.p.pp - a.p.pp).slice(0, 5),
+  const L = T.lines, numOf = new Map(roster.map(r => [r.id, r.num]));
+  const df = xs => xs.map(([id, n, pos, num]) => ({ id, n, pos: pos || (roster.find(r => r.id === id) || {}).pos || "", num: num ?? numOf.get(id), p: id ? byId.get(id) : null }));
+  const lines = L ? L.f.map(df) : [0, 1, 2, 3].map(i => F.slice(i * 3, i * 3 + 3).sort(LCR)), pairs = L ? L.d.map(df) : [0, 1, 2].map(i => D.slice(i * 2, i * 2 + 2));
+  const placed = new Set(lines.flat().concat(pairs.flat()).map(r => r.id));
+  return { t, f, k, ice, name: ARENA.names[t] || t, record: ARENA.stand[t] || "", roster, src: L,
+    lines, pairs, extra: L ? healthy.filter(r => r.pos !== "G" && !placed.has(r.id)) : F.slice(12).concat(D.slice(6)),
+    G: L && L.g.length ? df(L.g).map(r => ({ ...r, pos: "G" })) : roster.filter(r => r.pos === "G" && r.p).sort((a, b) => b.p.gs - a.p.gs),
+    pp1: L && L.pp1.length ? df(L.pp1) : healthy.filter(r => r.pos !== "G").sort((a, b) => b.p.pp - a.p.pp).slice(0, 5),
     out: roster.filter(r => r.p && isOut(r.p)), noGames: roster.filter(r => !r.p),
     sys: T.system.map(([id, n, pos, by]) => ({ id, n, pos, age: by ? new Date().getFullYear() - by : null })),
     next: ARENA.Z.byTeam[t].filter(g => g.d >= todayISO()).slice(0, 4) };
@@ -516,11 +521,12 @@ function arenaTeams() {
   const jersey = (r, sub) => `<div class="ar-jersey spot"><b>${r.num ?? ""}</b><span>${nm(r)}${r.p ? badge(r.p) : ""}</span><small>${sub}</small></div>`;
   return `<div class="ar-rack" role="list">${Object.keys(ARENA.teams).sort().map(t => `<button type="button" role="listitem" data-team="${t}" aria-pressed="${t === vm.t}">${tbadge(t)}</button>`).join("")}</div>
     <div class="ar-teamhead">${tbadge(vm.t, "xl")}<div><h2>${esc(vm.name)}</h2><p>${vm.record ? vm.record + ". " : ""}Next: ${vm.next.map(g => `${dayName(g.d)} ${g.home ? "vs" : "@"} ${g.opp}`).join(", ")}</p></div></div>
-    <p class="ar-note">Lines by ice time over the last 14 days. The NHL doesn't publish line combinations, so this is who plays with whom by usage, not a confirmed lineup.</p>
-    <div class="ar-lines">${vm.lines.map((ln, i) => `<div class="ar-line"><span>Line ${i + 1}</span>${ln.map(r => jersey(r, `${POS[r.pos] || r.pos}, ${mmss(vm.ice(r))} a game`)).join("")}</div>`).join("")}
-      ${vm.pairs.map((pr, i) => `<div class="ar-line d"><span>Pair ${i + 1}</span>${pr.map(r => jersey(r, `D, ${mmss(vm.ice(r))} a game`)).join("")}</div>`).join("")}
-      <div class="ar-line g"><span>Goal</span>${vm.G.map(r => jersey(r, `${r.p.gs} starts, ${Math.round(startShare(r.p) * 100)}%`)).join("")}</div></div>
-    <div class="ar-cols"><div><h3 class="ar-h3">Top power-play unit</h3>${vm.pp1.map(r => `<p class="ar-row">${nm(r)}<small>${mmss(r.p.pp)} on the power play a game</small></p>`).join("")}
+    <p class="ar-note">${vm.src ? `Lines and power play from <a href="${esc(vm.src.url)}" rel="noopener">Daily Faceoff</a>${vm.src.at ? `, updated ${dayDate(vm.src.at)}` : ""}. Ice time is from the NHL's data over the last 14 days.`
+      : "Lines by ice time over the last 14 days: who plays with whom by usage, not a confirmed lineup."}</p>
+    <div class="ar-lines">${vm.lines.map((ln, i) => `<div class="ar-line"><span>Line ${i + 1}</span>${ln.map(r => jersey(r, `${POS[r.pos] || r.pos}${r.p ? `, ${mmss(vm.ice(r))} a game` : ""}`)).join("")}</div>`).join("")}
+      ${vm.pairs.map((pr, i) => `<div class="ar-line d"><span>Pair ${i + 1}</span>${pr.map(r => jersey(r, `D${r.p ? `, ${mmss(vm.ice(r))} a game` : ""}`)).join("")}</div>`).join("")}
+      <div class="ar-line g"><span>Goal</span>${vm.G.map(r => jersey(r, r.p ? `${r.p.gs} starts, ${Math.round(startShare(r.p) * 100)}%` : "no starts yet")).join("")}</div></div>
+    <div class="ar-cols"><div><h3 class="ar-h3">Top power-play unit</h3>${vm.pp1.map(r => `<p class="ar-row">${nm(r)}<small>${r.p ? `${mmss(r.p.pp)} on the power play a game` : "no games yet"}</small></p>`).join("")}
       <h3 class="ar-h3">Out</h3>${vm.out.map(r => `<p class="ar-row">${nm(r)} ${badge(r.p)}<small>${esc(injNote(r.p) || "not dressing")}</small></p>`).join("") || `<p class="ar-quiet">Nobody.</p>`}
       ${vm.extra.length ? `<h3 class="ar-h3">Extras</h3>${vm.extra.map(r => `<p class="ar-row">${nm(r)}<small>${POS[r.pos] || r.pos}, ${mmss(vm.ice(r))}</small></p>`).join("")}` : ""}</div>
       <div><h3 class="ar-h3">In the system</h3><p class="ar-note">Signed or drafted, not on the NHL roster: AHL, junior, college or Europe.</p>${vm.sys.map(s => `<p class="ar-row">${esc(s.n)}<small>${POS[s.pos] || s.pos}${s.age ? `, age ${s.age}` : ""}</small></p>`).join("") || `<p class="ar-quiet">None listed.</p>`}
