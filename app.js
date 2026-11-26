@@ -734,10 +734,13 @@ function playerPicker(input, onAdd) {
   dl.innerHTML = list.map(p => `<option value="${esc(p.n)} (${p.t} ${p.p})">`).join("");
   document.body.append(dl);
   input.setAttribute("list", dl.id);
-  input.addEventListener("change", () => {
-    const p = list.find(x => `${x.n} (${x.t} ${x.p})` === input.value);
+  const pick = () => {   // the exact dropdown text, or a plain typed name (most games played wins a same-name tie)
+    const v = input.value.trim(), lo = v.toLowerCase(); if (!v) return;
+    const p = list.find(x => `${x.n} (${x.t} ${x.p})` === v) || list.filter(x => x.n.toLowerCase() === lo).sort((a, b) => (b.gp || 0) - (a.gp || 0))[0];
     if (p) { onAdd(p); input.value = ""; }
-  });
+  };
+  input.addEventListener("change", pick);
+  input.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); pick(); } });
 }
 
 async function fantasyTrade() {
@@ -803,9 +806,9 @@ async function nhlTrade() {
   function line(p, s) {
     const capIn = `<input class="games cap" data-id="${p.id}" type="number" step="0.05" min="0" placeholder="$M" value="${cap[p.id] ?? ""}" aria-label="Cap hit for ${esc(p.n)} in millions">`;
     if (isG(p)) { const sv = p.s.SA ? (p.s.SV / p.s.SA).toFixed(3).replace(/^0/, "") : "-";
-      return `<tr><td>${esc(p.n)} <span class="muted small">${p.t} G</span></td><td class="num">${p.gs} GS</td><td class="num led">${sv}</td><td class="num">${(p.s.GA / Math.max(p.gs, 1)).toFixed(2)} GA/GS</td><td class="num">${p.s.W}-${p.s.L}-${p.s.OTL}</td><td class="num">${capIn}</td><td><button class="x" data-rm="${s}:${p.id}" aria-label="Remove ${esc(p.n)}">×</button></td></tr>`; }
+      return `<tr><td>${esc(p.n)} <span class="muted small">${p.t} G</span><span class="meta" style="display:block;margin:0">${p.s.W}-${p.s.L}-${p.s.OTL}, ${(p.s.GA / Math.max(p.gs, 1)).toFixed(2)} goals against a start</span></td><td class="num">${p.gs}</td><td class="num led">${sv}</td><td class="num">-</td><td class="num">${capIn}</td><td><button class="x" data-rm="${s}:${p.id}" aria-label="Remove ${esc(p.n)}">×</button></td></tr>`; }
     const pts = p.s.G + p.s.A, pace = Math.round(pts / p.gp * 84);
-    return `<tr><td>${esc(p.n)} <span class="muted small">${p.t} ${p.p}</span></td><td class="num">${p.gp} GP</td><td class="num led">${p.s.G}-${p.s.A}-${pts}</td><td class="num">${pace} pace</td><td class="num">${mmss(p.toi)} TOI, ${mmss(p.pp)} PP</td><td class="num">${capIn}</td><td><button class="x" data-rm="${s}:${p.id}" aria-label="Remove ${esc(p.n)}">×</button></td></tr>`;
+    return `<tr><td>${esc(p.n)} <span class="muted small">${p.t} ${p.p}</span><span class="meta" style="display:block;margin:0">${mmss(p.toi)} a night, ${mmss(p.pp)} on the PP</span></td><td class="num">${p.gp}</td><td class="num led">${p.s.G}-${p.s.A}-${pts}</td><td class="num">${pace}</td><td class="num">${capIn}</td><td><button class="x" data-rm="${s}:${p.id}" aria-label="Remove ${esc(p.n)}">×</button></td></tr>`;
   }
   function render(rebuild = true) {
     const sum = {};

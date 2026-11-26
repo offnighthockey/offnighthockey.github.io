@@ -205,6 +205,7 @@ details.private ol { padding-left: 18px; } .btn.bm { cursor: grab; border-color:
 
 /* ---------- trade pages, folds, sheets, footer ---------- */
 .side h3 { display: flex; justify-content: space-between; align-items: baseline; } .side .total { font-size: 38px; }
+.side td, .side th { padding-left: 6px; padding-right: 6px; } .side input.games { width: 60px; padding: 6px; } .side td:first-child { min-width: 150px; }
 .verdict { text-align: center; font: 900 clamp(30px, 4.4vw, 48px)/1.05 var(--head); text-transform: uppercase; margin: 8px 0; } .verdict.fair { color: var(--amber); } .verdict.win { color: var(--green); }
 .weights { display: grid; grid-template-columns: repeat(auto-fit, minmax(90px, 1fr)); gap: 10px; }
 details.fold > summary { font: 800 22px/1.2 var(--head); text-transform: uppercase; letter-spacing: .03em; cursor: pointer; list-style: none; display: flex; justify-content: space-between; align-items: center; }
