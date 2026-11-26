@@ -456,79 +456,120 @@ function weekTotals(W) {
   return W.rows.reduce((a, r) => ({ g: a.g + r.games * startShare(r.p), u: a.u + r.used }), { g: 0, u: 0 });
 }
 
-/* ---------- Tonight (home): pick a night on the board, see who plays and who to stream ---------- */
+/* ---------- Home: the Arena. Four full-screen sections side by side under giant headline tabs; swipe, scroll or click ---------- */
+const TEAM_COLORS = { ANA: ["#F47A38", "#B9975B"], BOS: ["#FFB81C", "#111111"], BUF: ["#003087", "#FFB81C"], CGY: ["#C8102E", "#F1BE48"],
+  CAR: ["#CE1126", "#111111"], CHI: ["#CF0A2C", "#111111"], COL: ["#6F263D", "#236192"], CBJ: ["#002654", "#CE1126"], DAL: ["#006847", "#8F8F8C"],
+  DET: ["#CE1126", "#FFFFFF"], EDM: ["#041E42", "#FF4C00"], FLA: ["#C8102E", "#041E42"], LAK: ["#111111", "#A2AAAD"], MIN: ["#154734", "#A6192E"],
+  MTL: ["#AF1E2D", "#192168"], NSH: ["#FFB81C", "#041E42"], NJD: ["#CE1126", "#111111"], NYI: ["#00539B", "#F47D30"], NYR: ["#0038A8", "#CE1126"],
+  OTT: ["#C52032", "#C2912C"], PHI: ["#F74902", "#111111"], PIT: ["#FCB514", "#111111"], SJS: ["#006D75", "#EA7200"], SEA: ["#001628", "#99D9D9"],
+  STL: ["#002F87", "#FCB514"], TBL: ["#002868", "#FFFFFF"], TOR: ["#00205B", "#FFFFFF"], UTA: ["#71AFE5", "#090909"], VAN: ["#00205B", "#00843D"],
+  VGK: ["#B4975A", "#333F42"], WSH: ["#041E42", "#C8102E"], WPG: ["#041E42", "#AC162C"] };
+const lum = hex => { const n = parseInt(hex.slice(1), 16), c = [n >> 16, (n >> 8) & 255, n & 255].map(v => { v /= 255; return v <= .04 ? v / 12.9 : ((v + .055) / 1.055) ** 2.4; });
+  return .2126 * c[0] + .7152 * c[1] + .0722 * c[2]; };
+const ARENA = { tab: 0, night: null, team: null, Z: null, teams: {}, names: {}, stand: {}, games: [] };
+const ARENA_KEYS = ["tonight", "mine", "teams", "tools"];
+function tbadge(t, cls = "") {   // team colors, not logos: recognition without using trademarks
+  const [a, b] = TEAM_COLORS[t] || ["#33475e", "#8a9db2"];
+  return `<span class="tb ${cls}" style="--c1:${a};--c2:${b};--fg:${lum(a) > .35 ? "#0b0f14" : "#fff"}" title="${esc(ARENA.names[t] || t)}">${esc(t)}</span>`;
+}
+const mmss = s => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`;
+const dateLong = d => new Date(d + "T12:00Z").toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", timeZone: "UTC" });
+const whyFold = (p, f) => isG(p) ? "" : `<details class="ar-why"><summary>Why</summary>${why(p, f)}</details>`;
+document.addEventListener("pointermove", e => {   // cards catch a spotlight that follows the cursor
+  const c = e.target.closest && e.target.closest(".spot, .panel"); if (!c) return;
+  const r = c.getBoundingClientRect(); c.style.setProperty("--mx", `${e.clientX - r.left}px`); c.style.setProperty("--my", `${e.clientY - r.top}px`);
+}, { passive: true });
+
+function arenaTonight() {
+  const Z = ARENA.Z, k = league().k, f = FORMATS[k], mon = mondayOf(todayISO()), d = ARENA.night || todayISO(), n = Z.perDay.get(d) || 0, kind = nightKind(n);
+  const st = n ? nightStreamers(Z, d, k, 8) : [], gs = n ? nightGoalies(Z, d, k, 4) : [];
+  const best = Z.teams.map(t => teamRange(Z, t, mon, addDays(mon, 6))).sort(bestFirst).slice(0, 6), mineT = myTeams();
+  return `<div class="ar-nights">${Array.from({ length: 7 }, (_, i) => addDays(mon, i)).map(x => { const m = Z.perDay.get(x) || 0;
+      return `<button type="button" data-night="${x}" class="${nightKind(m)}" aria-pressed="${x === d}"><span>${dayName(x)}</span><b>${m}</b><small>${dayDate(x)}</small></button>`; }).join("")}</div>
+    <h2 class="ar-h">${d === todayISO() ? "Tonight" : dayName(d)}, ${dateLong(d).split(", ")[1]}<em class="${kind}">${n} ${n === 1 ? "game" : "games"}${kind === "light" ? ", a light night: benches have room" : kind === "packed" ? ", packed: set your lineup" : ""}</em></h2>
+    <div class="ar-faceoffs">${ARENA.games.filter(g => g[0] === d).map(([, a, h]) => `<button type="button" class="ar-fo spot" data-team="${h}">${tbadge(a, "lg")}<span>at</span>${tbadge(h, "lg")}</button>`).join("") || `<p class="ar-quiet">No games. Pick another night.</p>`}</div>
+    <h3 class="ar-h3">Streamers on this slate <small>${LEAGUE ? `free agents in ${esc(LEAGUE.name)}` : "likely on waivers"}</small></h3>
+    <div class="ar-cards">${st.map(x => `<article class="ar-card spot">${tbadge(x.p.t)}<b>${esc(x.p.n)}${badge(x.p)}</b><strong>${vfmtA(x.v)}<i>per game</i></strong>
+      <small>${POS[x.p.p]}, ${x.p.gp} games, ${x.p.rgp} in the last 14 days</small>${sparks(x.p, f)}${whyFold(x.p, f)}</article>`).join("") || `<p class="ar-quiet">Nobody to stream on a night with no games.</p>`}</div>
+    ${gs.length ? `<h3 class="ar-h3">Likely in goal</h3><div class="ar-cards">${gs.map(x => `<article class="ar-card spot">${tbadge(x.p.t)}<b>${esc(x.p.n)}</b><strong>${vfmtA(x.v)}<i>per start</i></strong>
+      <small>${x.call ? `<span class="pill${x.call === "Confirmed" ? "" : " amber"}">${x.call}</span>` : `${Math.round(x.share * 100)}% of his team's starts`}</small></article>`).join("")}</div>` : ""}
+    <h3 class="ar-h3">Best schedules this week <small>most games, then most light-night games</small></h3>
+    <div class="ar-best">${best.map(r => `<button type="button" class="ar-sched spot${mineT.has(r.t) ? " mine" : ""}" data-team="${r.t}">${tbadge(r.t)}<b>${r.games}</b><span>games, ${r.light} on light nights${r.b2b ? `, ${r.b2b} back-to-back` : ""}</span></button>`).join("")}</div>
+    <h3 class="ar-h3">Waiver leaders <small>${esc(f.name)}</small></h3><div class="panel">${leadersTable(k, 10)}</div>
+    <p class="ar-more"><a href="waiver-wire.html">Full waiver wire</a><a href="schedule.html">Schedule planner</a><a href="nhl-4-game-teams-this-week.html">4-game teams</a></p>`;
+}
+const vfmtA = x => fmt(x, 2);
+function teamVM(t) {
+  const T = ARENA.teams[t], byId = new Map(everyone().map(p => [p.id, p])), k = league().k, f = FORMATS[k];
+  const roster = T.roster.map(([id, n, pos, num]) => ({ id, n, pos, num, p: byId.get(id) }));
+  const healthy = roster.filter(r => r.p && !isOut(r.p)), ice = r => r.p.rt || r.p.toi;
+  const F = healthy.filter(r => "CLR".includes(r.pos)).sort((a, b) => ice(b) - ice(a)), D = healthy.filter(r => r.pos === "D").sort((a, b) => ice(b) - ice(a));
+  return { t, f, k, ice, name: ARENA.names[t] || t, record: ARENA.stand[t] || "", roster,
+    lines: [0, 1, 2, 3].map(i => F.slice(i * 3, i * 3 + 3)), pairs: [0, 1, 2].map(i => D.slice(i * 2, i * 2 + 2)), extra: F.slice(12).concat(D.slice(6)),
+    G: roster.filter(r => r.pos === "G" && r.p).sort((a, b) => b.p.gs - a.p.gs), pp1: healthy.filter(r => r.pos !== "G").sort((a, b) => b.p.pp - a.p.pp).slice(0, 5),
+    out: roster.filter(r => r.p && isOut(r.p)), noGames: roster.filter(r => !r.p),
+    sys: T.system.map(([id, n, pos, by]) => ({ id, n, pos, age: by ? new Date().getFullYear() - by : null })),
+    next: ARENA.Z.byTeam[t].filter(g => g.d >= todayISO()).slice(0, 4) };
+}
+function arenaTeams() {
+  const vm = teamVM(ARENA.team), nm = r => esc(r.p ? r.p.n : r.n);
+  const jersey = (r, sub) => `<div class="ar-jersey spot"><b>${r.num ?? ""}</b><span>${nm(r)}${r.p ? badge(r.p) : ""}</span><small>${sub}</small></div>`;
+  return `<div class="ar-rack" role="list">${Object.keys(ARENA.teams).sort().map(t => `<button type="button" role="listitem" data-team="${t}" aria-pressed="${t === vm.t}">${tbadge(t)}</button>`).join("")}</div>
+    <div class="ar-teamhead">${tbadge(vm.t, "xl")}<div><h2>${esc(vm.name)}</h2><p>${vm.record ? vm.record + ". " : ""}Next: ${vm.next.map(g => `${dayName(g.d)} ${g.home ? "vs" : "@"} ${g.opp}`).join(", ")}</p></div></div>
+    <p class="ar-note">Lines by ice time over the last 14 days. The NHL doesn't publish line combinations, so this is who plays with whom by usage, not a confirmed lineup.</p>
+    <div class="ar-lines">${vm.lines.map((ln, i) => `<div class="ar-line"><span>Line ${i + 1}</span>${ln.map(r => jersey(r, `${POS[r.pos] || r.pos}, ${mmss(vm.ice(r))} a game`)).join("")}</div>`).join("")}
+      ${vm.pairs.map((pr, i) => `<div class="ar-line d"><span>Pair ${i + 1}</span>${pr.map(r => jersey(r, `D, ${mmss(vm.ice(r))} a game`)).join("")}</div>`).join("")}
+      <div class="ar-line g"><span>Goal</span>${vm.G.map(r => jersey(r, `${r.p.gs} starts, ${Math.round(startShare(r.p) * 100)}%`)).join("")}</div></div>
+    <div class="ar-cols"><div><h3 class="ar-h3">Top power-play unit</h3>${vm.pp1.map(r => `<p class="ar-row">${nm(r)}<small>${mmss(r.p.pp)} on the power play a game</small></p>`).join("")}
+      <h3 class="ar-h3">Out</h3>${vm.out.map(r => `<p class="ar-row">${nm(r)} ${badge(r.p)}<small>${esc(injNote(r.p) || "not dressing")}</small></p>`).join("") || `<p class="ar-quiet">Nobody.</p>`}
+      ${vm.extra.length ? `<h3 class="ar-h3">Extras</h3>${vm.extra.map(r => `<p class="ar-row">${nm(r)}<small>${POS[r.pos] || r.pos}, ${mmss(vm.ice(r))}</small></p>`).join("")}` : ""}</div>
+      <div><h3 class="ar-h3">In the system</h3><p class="ar-note">Signed or drafted, not on the NHL roster: AHL, junior, college or Europe.</p>${vm.sys.map(s => `<p class="ar-row">${esc(s.n)}<small>${POS[s.pos] || s.pos}${s.age ? `, age ${s.age}` : ""}</small></p>`).join("") || `<p class="ar-quiet">None listed.</p>`}
+      ${vm.noGames.length ? `<h3 class="ar-h3">On the roster, no games yet</h3>${vm.noGames.map(r => `<p class="ar-row">${esc(r.n)}<small>${POS[r.pos] || r.pos}</small></p>`).join("")}` : ""}</div></div>
+    <details class="panel fold"><summary>Standings</summary><div class="standings" id="standings"></div></details>`;
+}
+let STANDINGS = null;
+function drawTeams() { $("#ar-teams").innerHTML = arenaTeams(); if (STANDINGS) $("#standings").innerHTML = standingsHTML(STANDINGS); }
+function drawTonight() { $("#ar-tonight").innerHTML = arenaTonight(); }
+function arenaGo(i, smooth = true) {
+  const tr = $("#track"); if (!tr) return;
+  tr.scrollTo({ left: i * tr.clientWidth, behavior: smooth && !matchMedia("(prefers-reduced-motion: reduce)").matches ? "smooth" : "auto" });
+}
+function arenaTrack() {
+  const tr = $("#track"), words = [...document.querySelectorAll(".ar-words [data-go]")], puck = $(".ar-puck");
+  const sync = () => {   // words and puck follow the swipe continuously, not just when it lands
+    const p = tr.scrollLeft / Math.max(tr.clientWidth, 1), i = Math.round(p), nav = $(".ar-words").getBoundingClientRect();
+    words.forEach((w, j) => { w.style.opacity = String(Math.max(.3, 1 - Math.abs(p - j) * .7)); w.toggleAttribute("aria-current", j === i); });
+    const a = words[Math.floor(p)] || words[0], b = words[Math.ceil(p)] || a, t = p - Math.floor(p), ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+    const x = (ra.left + ra.width / 2 - nav.left) * (1 - t) + (rb.left + rb.width / 2 - nav.left) * t + $(".ar-words").scrollLeft;
+    puck.style.transform = `translateX(${x - 14}px) rotate(${p * 360}deg)`;
+    if (i !== ARENA.tab) { ARENA.tab = i; history.replaceState(null, "", "#" + ARENA_KEYS[i] + (i === 2 ? "/" + ARENA.team : "")); a.scrollIntoView({ block: "nearest", inline: "nearest" }); }
+  };
+  tr.addEventListener("scroll", sync, { passive: true }); addEventListener("resize", () => { arenaGo(ARENA.tab, false); sync(); });
+  $(".ar-words").addEventListener("click", e => { const w = e.target.closest("[data-go]"); if (!w) return; e.preventDefault(); arenaGo(+w.dataset.go); });
+  $(".ar-words").addEventListener("keydown", e => { if (e.key === "ArrowRight") arenaGo(Math.min(3, ARENA.tab + 1)); if (e.key === "ArrowLeft") arenaGo(Math.max(0, ARENA.tab - 1)); });
+  document.addEventListener("click", e => {
+    const n = e.target.closest && e.target.closest("[data-night]"); if (n) { ARENA.night = n.dataset.night; drawTonight(); return; }
+    const t = e.target.closest && e.target.closest("[data-team]"); if (t && ARENA.teams[t.dataset.team]) { ARENA.team = t.dataset.team; drawTeams(); if (ARENA.tab !== 2) arenaGo(2); history.replaceState(null, "", "#teams/" + ARENA.team); }
+  });
+  addEventListener("hashchange", () => {   // same-page links like index.html#tools (replaceState never fires this, so no loop)
+    const [sec, arg] = location.hash.slice(1).split("/"), i = ARENA_KEYS.indexOf(sec); if (i < 0) return;
+    if (i === 2 && arg && ARENA.teams[arg] && arg !== ARENA.team) { ARENA.team = arg; drawTeams(); }
+    if (i !== ARENA.tab) arenaGo(i);
+  });
+  arenaGo(ARENA.tab, false); requestAnimationFrame(sync);
+}
 async function home() {
-  const [players, standings, S] = await Promise.all([load("players"), load("standings"), load("schedule")]);
-  DATA = players;
-  const Z = seasonIndex(S), today = todayISO();
+  const [players, S, teams, week, standings] = await Promise.all([load("players"), load("schedule"), load("teams"), load("week").catch(() => ({ names: {} })), load("standings").catch(() => null)]);
+  DATA = players; ARENA.games = S.games; ARENA.Z = seasonIndex(S); ARENA.teams = teams.teams; ARENA.names = week.names || {}; STANDINGS = standings;
+  ARENA.stand = Object.fromEntries(((standings || {}).rows || []).map(r => [r.teamAbbrev, `${r.wins}-${r.losses}-${r.otLosses}`]));
   await loadLeague();
   initScoring();
-  let wk = 0, show = "sk", lim = 8, sel = today;
-  const days = () => { const m = addDays(mondayOf(today), 7 * wk); return Array.from({ length: 7 }, (_, i) => addDays(m, i)); };
-  if (!days().includes(sel)) sel = days()[0];
-  const weekGamesOf = t => days().filter(d => Z.plays.has(t + d)).length;
-  const drawBoard = () => { $("#board").innerHTML = boardHTML(days(), sel, d => { const n = Z.perDay.get(d) || 0, k = nightKind(n);
-    return { kind: k, num: n, label: k === "light" ? "light" : k === "packed" ? "packed" : n ? "games" : "off", aria: `${n} games${k ? ", " + k + " night" : ""}` }; }); };
-  const drawNight = () => {
-    const k = league().k, f = FORMATS[k], n = Z.perDay.get(sel) || 0, kind = nightKind(n);
-    $("#night-title").textContent = sel === today ? "Tonight" : new Date(sel + "T12:00Z").toLocaleDateString("en-US", { weekday: "long", timeZone: "UTC" });
-    $("#night-sub").textContent = `${longDate(sel)}: ` + (!n ? "no NHL games." : `${n} games` + (kind === "light" ? ", a light night. Most benches have open spots, so a pickup counts." : kind === "packed" ? ", a packed night. Benches fill up; set your lineup." : "."));
-    const mineT = myTeams();
-    $("#np-teams").innerHTML = n ? `<span class="chips">${teamsOn(Z, sel).map(t => `<span class="chip${mineT.has(t) ? " mine" : ""}">${esc(t)}</span>`).join("")}</span>` : "";
-    $("#np-title").textContent = show === "g" ? "Likely goalie starts" : "Streamers";
-    if (!n) { $("#np-list").innerHTML = `<p class="note">No games this night. Pick another night on the board.</p>`; return; }
-    if (show === "g") {
-      const gs = nightGoalies(Z, sel, k, 10);
-      $("#np-list").innerHTML = `<div class="scroll"><table><thead><tr><th>Goalie</th><th class="num">Share of starts</th><th class="num">${f.type === "points" ? "Pts per start" : "Value per start"}</th></tr></thead><tbody>${
-        gs.map(x => `<tr><td>${who(x.p)}${x.call ? ` <span class="pill${x.call === "Confirmed" ? "" : " amber"}">${x.call}</span>` : ""}</td><td class="num">${x.call ? "Starting" : Math.round(x.share * 100) + "%"}</td><td class="num led">${fmt(x.v, 2)}</td></tr>`).join("")}</tbody></table></div>
-        <p class="note">${LEAGUE ? "Confirmed and expected starters come from ESPN; the rest show each goalie's share of his team's starts this season." : "Each goalie's share of his team's starts this season. Connect your ESPN league to see expected and confirmed starters."}</p>`;
-      return;
-    }
-    const st = nightStreamers(Z, sel, k, 8);
-    const pts = f.type === "points";
-    $("#np-list").innerHTML = `<div class="scroll"><table class="ev"><thead><tr><th>Player</th><th class="num">Games</th><th>Last 5</th><th class="num">This week</th><th class="num">Per game</th></tr></thead><tbody>${
-      st.map(x => { const g = weekGamesOf(x.p.t); return `<tr><td>${who(x.p)} ${whyBtn}</td><td class="num">${played(x.p)}</td><td>${sparks(x.p, f)}</td><td class="num">${g}${g >= 4 ? ' <span class="pill">4G</span>' : ""}</td><td class="num led">${fmt(x.v, 2)}</td></tr>${whyRow(x.p, f, 5)}`; }).join("")}</tbody></table></div>
-      <p class="note">${LEAGUE ? `Free agents in ${esc(LEAGUE.name)}, ${esc(f.name)} scoring.` : `Likely on waivers in ${esc(f.name)} (outside the top 150 in this scoring).`} ${METHOD}</p>`;
-  };
-  const drawSnap = () => {
-    const mine = myRoster();
-    if (!mine.length) {
-      $("#snap-body").innerHTML = `<div class="empty"><p class="big-line">How many of your players' games can you use?</p>
-        <label for="snap-league">Paste your ESPN league link</label><form class="inline" id="snap-form"><input id="snap-league" placeholder="fantasy.espn.com/hockey/team?leagueId=..." autocomplete="off"><button class="btn primary" type="submit">Connect</button></form>
-        <p class="note">Or <a href="team.html">add players by hand on My team</a>.</p></div>`;
-      $("#snap-form").addEventListener("submit", e => { e.preventDefault(); const L = parseLeagueLink($("#snap-league").value);
-        if (!L) { $("#snap-league").setCustomValidity("Paste the link from your ESPN team page. It has leagueId in it."); $("#snap-league").reportValidity(); return; }
-        store.set("espn", { lid: L.lid, season: L.season, tid: L.tid }); location.href = "team.html"; });
-      return;
-    }
-    const k = league().k, f = FORMATS[k], ds = days(), from = ds.includes(today) ? today : ds[0];
-    const W = usableWeek(Z, mine, from, ds[6], slotSet(), f, k), tot = weekTotals(W);
-    const empty = W.nights.filter(nt => nt.n).reduce((a, nt) => a + openSkaters(nt.left), 0), top = bestAdds(Z, W, mine, f, k)[0];
-    const on = mine.filter(p => Z.plays.has(p.t + sel)).length;
-    const fix = sel === today ? lineupFix(Z, today, mine, f, k) : null;
-    $("#snap-body").innerHTML = (fix ? `<p class="alert">${fixText(fix)}</p>` : "")
-      + `<p class="big-line"><span class="led">${fmt(tot.u, 0)}</span> of ${fmt(tot.g, 0)} games usable</p>
-      <p class="note">${wk ? "Next week" : from === today ? "Rest of this week" : "This week"}, with ${empty} empty skater spot-nights.</p>
-      <p>${sel === today ? "Tonight" : dayName(sel)}: ${on} of your ${mine.length} players play.</p>
-      ${top ? `<p>Best add: <strong>${esc(top.p.n)}</strong><span class="meta">${esc(top.p.t)} ${POS[top.p.p]}</span>, ${top.add} usable game${top.add > 1 ? "s" : ""}, about ${fmt(top.total, 1)} points.</p>` : ""}`;
-  };
-  const drawBest = () => {
-    const ds = days(), mineT = myTeams(), rows = Z.teams.map(t => teamRange(Z, t, ds[0], ds[6])).sort(bestFirst).slice(0, 8);
-    $("#best-note").textContent = `Week of ${dayDate(ds[0])}: most games, then most games on light nights.`;
-    $("#best").innerHTML = `<div class="scroll"><table><thead><tr><th>Team</th><th class="num">Games</th><th class="num">On light nights</th><th class="num">Back-to-backs</th></tr></thead><tbody>${
-      rows.map(r => `<tr${mineT.has(r.t) ? ' class="mine"' : ""}><td><strong>${esc(r.t)}</strong></td><td class="num led">${r.games}</td><td class="num">${r.light}</td><td class="num">${r.b2b || ""}</td></tr>`).join("")}</tbody></table></div>`;
-  };
-  const drawLeaders = () => { const k = league().k; $("#leaders").innerHTML = leadersTable(k, lim);
-    $("#leader-note").textContent = `${FORMATS[k].name}, likely on waivers, last 14 days blended with the season.`; };
-  const all = () => { drawBoard(); drawNight(); drawSnap(); drawBest(); drawLeaders(); };
-  $("#board").addEventListener("click", e => { const b = e.target.closest(".tile"); if (!b || b.dataset.d === sel) return;
-    sel = b.dataset.d; drawBoard(); drawNight(); drawSnap(); sweep($("#night-panel")); });
-  segment($(".pagehead .seg"), b => { wk = +b.dataset.wk; sel = days().includes(today) ? today : days()[0]; all(); sweep($("#night-panel")); });
-  segment($("#night-panel .seg"), b => { show = b.dataset.show; drawNight(); });
-  $("#leaders-more").addEventListener("click", e => { lim = lim === 8 ? 25 : 8; e.target.textContent = lim === 8 ? "Show 25" : "Show 8"; drawLeaders(); });
-  onLeague(() => { drawNight(); drawSnap(); drawLeaders(); });
-  all();
-  $("#standings").innerHTML = standingsHTML(standings);
+  const [sec, arg] = location.hash.slice(1).split("/");
+  ARENA.tab = Math.max(0, ARENA_KEYS.indexOf(sec));
+  ARENA.team = arg && ARENA.teams[arg] ? arg : (myRoster()[0] || {}).t || "COL";
+  drawTonight(); drawTeams(); mountMyTeam(ARENA.Z);
+  onLeague(() => { drawTonight(); drawTeams(); });
+  arenaTrack();
   $("#updated").textContent = players.updated;
 }
 
@@ -576,9 +617,14 @@ function renderConnect(Z) {
 async function teamPage() {
   const [players, S] = await Promise.all([load("players"), load("schedule")]);
   DATA = players;
-  const Z = seasonIndex(S), today = todayISO();
+  const Z = seasonIndex(S);
   await loadLeague();
   initScoring();
+  mountMyTeam(Z);
+  $("#updated").textContent = players.updated;
+}
+function mountMyTeam(Z) {   // the full My team workspace; runs on team.html and inside the Arena home
+  const today = todayISO(), players = DATA;
   renderConnect(Z);
   let span = store.get("myweek", "rest") === "next" ? "next" : "rest", sel = null;
   document.querySelectorAll(".pagehead .seg button").forEach(b => b.setAttribute("aria-pressed", b.dataset.wk === span));
@@ -637,6 +683,19 @@ async function teamPage() {
       <h3 style="margin-top:14px">Open spots</h3><p>${open.length ? open.map(([s, c]) => `${c} ${s}`).join(", ") : "None"}</p></div>
       <div><h3>Fill an open spot</h3><ul>${fill.map(x => `<li>${who(x.p)} <span class="led">${fmt(x.v, 2)}</span></li>`).join("") || "<li class='muted'>No open skater spots</li>"}</ul></div></div>`}`;
     const adds = bestAdds(Z, W, mine, f, k);
+    // add/drop pairs: each best add against the weakest players on the roster, kept when it gains this week without costing the season
+    const ros = p => value(p, f, k, gamesLeft(p)), wk = new Map(W.rows.map(r => [r.p.id, r.used * r.v]));
+    const dropC = mine.filter(p => LINEUP[p.id] !== 8).map(p => ({ p, week: wk.get(p.id) || 0, ros: ros(p), out: isOut(p) })).sort((x, y) => x.ros - y.ros || x.week - y.week).slice(0, 4);
+    const pairs = [], usedP = new Set();
+    adds.map(a => ({ ...a, ros: ros(a.p) })).flatMap(a => dropC.map(d => ({ a, d, week: a.total - d.week, rest: a.ros - d.ros })))
+      .filter(x => x.week > 0.3 && x.rest > -6).sort((x, y) => (y.week + .15 * y.rest) - (x.week + .15 * x.rest))
+      .forEach(x => { if (pairs.length < 3 && !usedP.has(x.a.p.id) && !usedP.has(x.d.p.id)) { usedP.add(x.a.p.id); usedP.add(x.d.p.id); pairs.push(x); } });
+    const mv = $("#moves");
+    if (mv) mv.innerHTML = `<h3 class="ar-h3">Make these moves <small>add and drop, side by side</small></h3>${pairs.map(pr => `<article class="ar-swap spot">
+      <div><em>Add</em>${tbadge(pr.a.p.t, "lg")}<b>${esc(pr.a.p.n)}</b>${sparks(pr.a.p, f)}</div><strong>+${fmt(pr.week, 1)}<i>this week</i></strong>
+      <div><em class="red">Drop</em>${tbadge(pr.d.p.t, "lg")}<b>${esc(pr.d.p.n)}</b>${badge(pr.d.p)}</div>
+      <p>${esc(pr.a.p.n)} plays ${pr.a.add} of your open night${pr.a.add === 1 ? "" : "s"} (${fmt(pr.a.v, 2)} a game). ${esc(pr.d.p.n)} ${pr.d.out ? `is out (${esc(injNote(pr.d.p) || "not dressing")})` : `projects ${fmt(pr.d.week, 1)} this week`}. Rest of season: ${pr.rest >= 0 ? "+" : ""}${fmt(pr.rest, 1)} over a replacement player.</p></article>`).join("")
+      || `<p class="ar-quiet">Nothing on the wire beats your roster this week. Hold your add.</p>`}`;
     const limit = LEAGUE ? (LEAGUE.acq > 0 ? ` Your league allows ${LEAGUE.acq} add${LEAGUE.acq > 1 ? "s" : ""} per matchup${LEAGUE.wday ? `, and waivers run ${LEAGUE.wday.charAt(0) + LEAGUE.wday.slice(1).toLowerCase()}` : ""}, so pick the one that covers the most open nights.` : "") : "";
     $("#adds").innerHTML = `<div class="panel-head"><h2>Best adds for your open spots</h2></div><p class="note">${LEAGUE ? `Free agents in ${esc(LEAGUE.name)}.` : `Likely on waivers in ${esc(f.name)}.`} Usable games = his team's games on nights you have an open spot he fits.${limit}</p>
       <div class="scroll"><table class="ev"><thead><tr><th>Player</th><th class="num">Games</th><th>Last 5</th><th class="num">Usable games</th><th class="num">Per game</th><th class="num">Adds you</th></tr></thead><tbody>${
@@ -659,7 +718,6 @@ async function teamPage() {
   onLeague(draw);
   drawSlotEdit();
   draw();
-  $("#updated").textContent = players.updated;
 }
 
 async function hub() {
@@ -877,7 +935,14 @@ const pageSlot = path => { const f = path.split("/").pop() || "index.html"; retu
 addEventListener("pageswap", () => { try { sessionStorage.setItem("onh.from", String(pageSlot(location.pathname))); } catch { /* no storage: the swipe just goes left to right */ } });
 
 const PAGES = { home, team: teamPage, hub, "fantasy-trade": fantasyTrade, "nhl-trade": nhlTrade, schedule: schedulePlanner };
+function parkPuck() {   // inner pages: the puck rests under the section the page belongs to
+  const w = $(".ar-words [aria-current]"), puck = $(".ar-puck"); if (!puck) return;
+  if (!w) { puck.hidden = true; return; }
+  const nav = $(".ar-words"), r = w.getBoundingClientRect();
+  puck.style.transform = `translateX(${r.left + r.width / 2 - nav.getBoundingClientRect().left + nav.scrollLeft - 14}px)`;
+}
 document.addEventListener("DOMContentLoaded", () => {
+  if (document.body.dataset.page !== "home") { parkPuck(); addEventListener("resize", parkPuck); const w = $(".ar-words [aria-current]"); if (w && window.ResizeObserver) new ResizeObserver(parkPuck).observe(w); }   // re-park when the web font swaps in
   const fn = PAGES[document.body.dataset.page];
   if (fn) fn().catch(err => { const m = document.querySelector("main"); m.insertAdjacentHTML("afterbegin", `<p class="panel red">Couldn't load the data (${esc(err.message)}). Try reloading.</p>`); });
 });
